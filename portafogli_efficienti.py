@@ -1138,42 +1138,97 @@ elif nav == "📈 Frontiera Efficiente":
                 mdd = estimate_max_drawdown(ms["weights"], price_dict)
                 m_col[3].metric("📉 Max Drawdown stimato", f"{mdd:.2f}%")
 
-        # Grafico Frontiera + Monte Carlo
+        # ── Grafico Frontiera Efficiente ─────────────────────────────────
         fig_fe = go.Figure()
+
+        # 1. Nuvola Monte Carlo colorata per Sharpe
         mc = result.get("monte_carlo", pd.DataFrame())
         if not mc.empty:
             fig_fe.add_trace(go.Scatter(
                 x=mc["vol"]*100, y=mc["ret"]*100, mode="markers",
-                marker=dict(color=mc["sharpe"], colorscale="Viridis",
-                            size=4, opacity=0.4, colorbar=dict(title="Sharpe")),
-                name="Simulazioni Monte Carlo",
-                hovertemplate="Vol: %{x:.1f}%<br>Rend: %{y:.1f}%<extra></extra>",
+                marker=dict(color=mc["sharpe"], colorscale="YlOrRd",
+                            size=4, opacity=0.35,
+                            colorbar=dict(title="Sharpe", thickness=12, len=0.6)),
+                name="Portafogli simulati",
+                hovertemplate="Vol: %{x:.2f}%<br>Rend: %{y:.2f}%<br>Sharpe: %{marker.color:.2f}<extra></extra>",
             ))
+
+        # 2. Curva frontiera efficiente — linea spessa blu navy
         frontier = result.get("frontier_df", pd.DataFrame())
         if not frontier.empty:
             fig_fe.add_trace(go.Scatter(
                 x=frontier["vol"]*100, y=frontier["ret"]*100,
-                mode="lines", line=dict(color=NAVY, width=3),
+                mode="lines",
+                line=dict(color=NAVY, width=3.5),
                 name="Frontiera Efficiente",
+                hovertemplate="Vol: %{x:.2f}% · Rend: %{y:.2f}%<extra>Frontiera</extra>",
             ))
-        for pdata, pname, pcolor in [
-            (ms, "Max Sharpe ★", "red"),
-            (result.get("min_variance",{}), "Min Varianza ★", "#1A6EBD"),
-            (bl_result or {}, "Black-Litterman ★", "green"),
-        ]:
-            if pdata and "error" not in pdata and "vol" in pdata:
+
+        # 3. Punti portafogli ottimali — grandi e ben etichettati
+        _portfolios_to_show = [
+            (ms,                              "Max Sharpe",       "#E74C3C", "star",    22),
+            (result.get("min_variance", {}),  "Min Varianza",     "#2980B9", "diamond", 18),
+            (bl_result or {},                 "Black-Litterman",  "#27AE60", "pentagon",18),
+        ]
+        _annotations = []
+        for pdata, pname, pcolor, psymbol, psize in _portfolios_to_show:
+            if pdata and "error" not in pdata and pdata.get("vol") and pdata.get("ret"):
+                vx = pdata["vol"] * 100
+                vy = pdata["ret"] * 100
+                sh = pdata.get("sharpe", 0)
                 fig_fe.add_trace(go.Scatter(
-                    x=[pdata["vol"]*100], y=[pdata["ret"]*100],
-                    mode="markers+text",
-                    marker=dict(color=pcolor, size=18, symbol="star"),
-                    text=[pname], textposition="top center", name=pname,
+                    x=[vx], y=[vy],
+                    mode="markers",
+                    marker=dict(color=pcolor, size=psize, symbol=psymbol,
+                                line=dict(color="white", width=1.5)),
+                    name=f"{pname} (Sharpe {sh:.2f})",
+                    hovertemplate=(
+                        f"<b>{pname}</b><br>"
+                        "Volatilità: %{x:.2f}%<br>"
+                        "Rendimento: %{y:.2f}%<br>"
+                        f"Sharpe: {sh:.3f}"
+                        "<extra></extra>"
+                    ),
                 ))
+                # Annotazione con freccia
+                _annotations.append(dict(
+                    x=vx, y=vy,
+                    xshift=0, yshift=24,
+                    text=f"<b>{pname}</b><br>Rend {vy:.1f}% · Vol {vx:.1f}%",
+                    showarrow=True,
+                    arrowhead=2, arrowsize=1, arrowwidth=1.5,
+                    arrowcolor=pcolor,
+                    font=dict(size=11, color=pcolor),
+                    bgcolor="white",
+                    bordercolor=pcolor,
+                    borderwidth=1.2,
+                    borderpad=4,
+                    opacity=0.9,
+                ))
+
         fig_fe.update_layout(
-            title="Frontiera Efficiente — Rischio vs Rendimento",
-            xaxis_title="Volatilità annua (%)",
-            yaxis_title="Rendimento atteso (%)",
-            height=520, template="plotly_white",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            title=dict(
+                text="Frontiera Efficiente — Rischio vs Rendimento",
+                font=dict(size=16, color=NAVY),
+            ),
+            xaxis=dict(
+                title="Volatilità annua (%)",
+                gridcolor="#E8ECF0", showgrid=True, zeroline=False,
+            ),
+            yaxis=dict(
+                title="Rendimento atteso (%)",
+                gridcolor="#E8ECF0", showgrid=True, zeroline=False,
+            ),
+            height=560,
+            template="plotly_white",
+            annotations=_annotations,
+            legend=dict(
+                orientation="h", yanchor="bottom", y=-0.18,
+                xanchor="center", x=0.5,
+                bgcolor="rgba(255,255,255,0.8)",
+                bordercolor="#DDD", borderwidth=1,
+            ),
+            margin=dict(t=60, b=100, l=60, r=60),
         )
         st.plotly_chart(fig_fe, use_container_width=True)
 
@@ -1229,21 +1284,103 @@ elif nav == "📈 Frontiera Efficiente":
         with tab_mv2: _render_weights(result.get("min_variance",{}), "Min Varianza")
         with tab_bl2: _render_weights(bl_result or {}, "Black-Litterman")
 
-        # Matrice correlazioni — SEMPRE visibile (non in expander)
+        # ── Matrice Correlazioni ─────────────────────────────────────────
         if len(price_dict) >= 2:
             st.markdown("---")
             st.subheader("🔗 Matrice Correlazioni")
-            prices_df = pd.DataFrame(price_dict).pct_change().dropna()
-            prices_df.columns = [isin_label.get(c, c) for c in prices_df.columns]
-            corr = prices_df.corr()
-            fig_corr = px.imshow(
-                corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
-                text_auto=".2f",
-                title="Correlazioni storiche tra strumenti selezionati",
-            )
-            fig_corr.update_layout(height=max(350, len(corr)*40))
-            st.plotly_chart(fig_corr, use_container_width=True)
-            st.caption("Valori vicini a +1: alta correlazione (si muovono insieme). Vicini a -1: diversificazione efficace.")
+            try:
+                # Ricostruisce DataFrame con indice datetime corretto
+                # (le Series in session_state possono perdere il dtype dell'indice)
+                _series_list = {}
+                for _k, _s in price_dict.items():
+                    if isinstance(_s, pd.Series):
+                        _s2 = _s.copy()
+                        _s2.index = pd.to_datetime(_s2.index)
+                        _series_list[_k] = _s2
+                    else:
+                        # fallback se serializzato come dict
+                        _s2 = pd.Series(_s)
+                        _s2.index = pd.to_datetime(_s2.index)
+                        _series_list[_k] = _s2
+
+                prices_df = (
+                    pd.DataFrame(_series_list)
+                    .sort_index()
+                    .ffill()
+                    .dropna(how="all")
+                )
+                returns_df = prices_df.pct_change().dropna()
+
+                if returns_df.empty or len(returns_df) < 3:
+                    st.warning(
+                        f"Serie troppo corte per calcolare correlazioni "
+                        f"({len(returns_df)} periodi disponibili dopo allineamento). "
+                        "Prova con un periodo più lungo nelle impostazioni."
+                    )
+                elif len(returns_df.columns) < 2:
+                    st.info("Servono almeno 2 strumenti con dati sovrapposti.")
+                else:
+                    # Rinomina colonne con nomi leggibili
+                    returns_df.columns = [
+                        isin_label.get(c, c)[:28] for c in returns_df.columns
+                    ]
+                    corr = returns_df.corr().round(2)
+                    n_assets = len(corr)
+                    cell_h = max(30, min(55, 420 // n_assets))
+                    fig_corr = px.imshow(
+                        corr,
+                        color_continuous_scale="RdBu_r",
+                        zmin=-1, zmax=1,
+                        text_auto=True,
+                        aspect="auto",
+                        title=None,
+                    )
+                    fig_corr.update_traces(
+                        textfont=dict(size=max(9, min(13, 140 // n_assets))),
+                        hovertemplate="%{x}<br>%{y}<br>Correlazione: %{z:.2f}<extra></extra>",
+                    )
+                    fig_corr.update_layout(
+                        height=max(300, n_assets * cell_h + 80),
+                        margin=dict(l=0, r=10, t=10, b=0),
+                        coloraxis_colorbar=dict(
+                            title="Corr.", thickness=12, len=0.8,
+                            tickvals=[-1, -0.5, 0, 0.5, 1],
+                        ),
+                        xaxis=dict(tickfont=dict(size=10)),
+                        yaxis=dict(tickfont=dict(size=10)),
+                    )
+                    st.plotly_chart(fig_corr, use_container_width=True)
+
+                    # Legenda interpretativa
+                    lc1, lc2, lc3 = st.columns(3)
+                    lc1.markdown("🔴 **vicino a +1** — si muovono insieme (bassa diversificazione)")
+                    lc2.markdown("⚪ **vicino a 0** — movimenti indipendenti")
+                    lc3.markdown("🔵 **vicino a -1** — movimenti opposti (ottima diversificazione)")
+
+                    # Tabella coppie con correlazione più alta/bassa
+                    _pairs = []
+                    cols_c = list(corr.columns)
+                    for i in range(len(cols_c)):
+                        for j in range(i+1, len(cols_c)):
+                            _pairs.append({
+                                "Asset A": cols_c[i], "Asset B": cols_c[j],
+                                "Correlazione": corr.iloc[i, j],
+                            })
+                    if _pairs:
+                        _pairs_df = pd.DataFrame(_pairs).sort_values("Correlazione")
+                        with st.expander("📊 Coppie più e meno correlate"):
+                            _low = _pairs_df.head(3)
+                            _high = _pairs_df.tail(3).iloc[::-1]
+                            c_low, c_high = st.columns(2)
+                            c_low.markdown("**Meno correlate (migliore diversificazione):**")
+                            c_low.dataframe(_low, use_container_width=True, hide_index=True,
+                                            column_config={"Correlazione": st.column_config.NumberColumn(format="%.2f")})
+                            c_high.markdown("**Più correlate (simili):**")
+                            c_high.dataframe(_high, use_container_width=True, hide_index=True,
+                                             column_config={"Correlazione": st.column_config.NumberColumn(format="%.2f")})
+
+            except Exception as _corr_err:
+                st.error(f"Errore nel calcolo delle correlazioni: {_corr_err}")
 
         # BL dettaglio
         if bl_result and "error" not in bl_result and "bl_returns" in bl_result:
