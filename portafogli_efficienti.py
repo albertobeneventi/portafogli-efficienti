@@ -555,31 +555,6 @@ if nav == "🏠 Home":
     col3.metric("Fondi Generalisti", len(lista_a))
     col4.metric("Fondi Tematici", len(lista_b))
 
-    # DEBUG — visibile solo se liste vuote
-    if len(lista_a) == 0 or len(lista_b) == 0:
-        with st.expander("🔍 Debug dati caricati", expanded=False):
-            st.markdown("**Colonne rilevate nel df_unified:**")
-            st.code(list(df_unified.columns))
-            if not df_unified.empty:
-                st.markdown("**Campione dati (prime 3 righe):**")
-                st.dataframe(df_unified.head(3))
-                st.markdown("**Distribuzione classificazione (top 10):**")
-                st.dataframe(df_unified["classificazione"].value_counts().head(10))
-                st.markdown("**Statistiche perf_3y:**")
-                st.write(df_unified["perf_3y"].describe())
-                st.markdown("**Distribuzione rating_fida:**")
-                st.write(df_unified["rating_fida"].value_counts(dropna=False))
-                from utils.scoring import is_generalista
-                from utils.data_loader import _remap_columns, TERZI_COLS
-                n_gen = df_unified["classificazione"].apply(is_generalista).sum()
-                st.write(f"Fondi con classificazione generalista: **{n_gen}**")
-                n_perf = df_unified["perf_3y"].notna().sum()
-                st.write(f"Fondi con perf_3y disponibile: **{n_perf}**")
-                st.markdown("**Sample classificazione (10 valori):**")
-                st.write(df_unified["classificazione"].dropna().head(10).tolist())
-                st.markdown("**Sample perf_3y (10 valori):**")
-                st.write(df_unified["perf_3y"].dropna().head(10).tolist())
-
     st.markdown("---")
     st.subheader("Liste Preselezionate")
     tab_a, tab_b = st.tabs(["📋 Fondi Generalisti", "🎯 Fondi Tematici"])
