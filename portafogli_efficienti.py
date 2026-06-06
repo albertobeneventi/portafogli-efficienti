@@ -35,8 +35,14 @@ from utils.etf_fetcher import (
     load_etf_universe, fetch_etf_universe, HARDCODED_ISINS, CATEGORY_MAP,
 )
 from utils.nav_fetcher import get_multiple_nav, get_nav_series
-from utils.optimizer import compute_efficient_frontier, compute_black_litterman, estimate_max_drawdown
-from utils.exporter import export_portfolio_excel, export_portfolio_pdf
+from utils.optimizer import (
+    compute_efficient_frontier, compute_black_litterman,
+    estimate_max_drawdown, compute_bl_auto_views,
+)
+from utils.exporter import (
+    export_portfolio_excel, export_portfolio_pdf,
+    export_advisorelite_csv, export_advisorelite_excel,
+)
 
 # ---------------------------------------------------------------------------
 # COSTANTI STILE
@@ -1533,6 +1539,7 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                         risk_free_rate=rfr,
                         forced_include=forced_include_sel or None,
                         sector_constraints=sector_constraints,
+                        assets_info=_all_fund_pool,
                     )
                 if "error" in result:
                     st.error(f"Errore ottimizzazione: {result['error']}")
@@ -1541,13 +1548,29 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                     st.success(f"Ottimizzazione completata su {len(price_dict)} strumenti{lbl}.")
                     st.session_state["fe_result"] = result
                     st.session_state["fe_price_dict"] = price_dict
-                    if use_bl and bl_views:
-                        with st.spinner("Black-Litterman..."):
-                            bl_r = compute_black_litterman(
-                                price_dict, bl_views, bl_conf,
-                                weight_bounds=(min_w, max_w), risk_free_rate=rfr,
+
+                    # ── Black-Litterman sempre calcolato ──────────────────
+                    # Views manuali se inserite, altrimenti auto da Score Qualità
+                    with st.spinner("Black-Litterman (views auto da Score Qualità)..."):
+                        _bl_views_used  = bl_views if (use_bl and bl_views) else {}
+                        _bl_confs_used  = bl_conf  if (use_bl and bl_views) else {}
+                        if not _bl_views_used:
+                            # Auto-views da Score Qualità
+                            _base_mu = result.get("mu", {})
+                            _bl_views_used, _bl_confs_used = compute_bl_auto_views(
+                                _all_fund_pool, base_returns=_base_mu
                             )
-                        st.session_state["bl_result"] = bl_r
+                        if _bl_views_used:
+                            bl_r = compute_black_litterman(
+                                price_dict, _bl_views_used, _bl_confs_used,
+                                weight_bounds=(min_w, max_w),
+                                risk_free_rate=rfr,
+                                assets_info=_all_fund_pool,
+                                forced_include=forced_include_sel or None,
+                                sector_constraints=sector_constraints,
+                            )
+                            st.session_state["bl_result"] = bl_r
+                            st.session_state["bl_views_used"] = _bl_views_used
 
     # ── RISULTATI ──────────────────────────────────────────────────────────
     if "fe_result" in st.session_state:
@@ -2037,46 +2060,120 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                                   yaxis_title="Rendimento atteso (%)")
             st.plotly_chart(fig_bl, use_container_width=True)
 
-        # Export
+        # ── EXPORT ──────────────────────────────────────────────────────────
         st.markdown("---")
-        exp_c1, exp_c2 = st.columns(2)
-        if ms and "error" not in ms:
-            metrics = {
-                "Rendimento atteso (%)": f"{ms.get('ret',0)*100:.2f}",
-                "Volatilità (%)": f"{ms.get('vol',0)*100:.2f}",
-                "Sharpe Ratio": f"{ms.get('sharpe',0):.3f}",
-                "Generato": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        st.subheader("📥 Esporta")
+
+        _mv_res  = result.get("min_variance", {})
+        _bl_res  = bl_result or {}
+        _bl_views_used = st.session_state.get("bl_views_used", {})
+        _today   = datetime.now().strftime("%Y%m%d")
+
+        def _make_metrics(pdata: dict, label: str) -> dict:
+            if not pdata or "error" in pdata:
+                return {}
+            return {
+                "Portafoglio": label,
+                "Rendimento atteso (%)": f"{pdata.get('ret',0)*100:.2f}",
+                "Volatilità (%)":        f"{pdata.get('vol',0)*100:.2f}",
+                "Sharpe Ratio":          f"{pdata.get('sharpe',0):.3f}",
+                "Generato":              datetime.now().strftime("%d/%m/%Y %H:%M"),
             }
-            excel_bytes = export_portfolio_excel(
-                ms["weights"], metrics,
-                fund_df=df_unified if not df_unified.empty else None,
-                price_dict=price_dict, title="Max Sharpe",
-            )
-            exp_c1.download_button(
-                "📥 Esporta Excel (Max Sharpe)", data=excel_bytes,
-                file_name=f"portafoglio_max_sharpe_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-            # Converti grafico frontiera in PNG per il PDF
-            _fe_png = None
-            try:
-                from utils.exporter import plotly_to_png
-                _fe_png = plotly_to_png(fig_fe)
-            except Exception:
-                pass
+
+        ms_metrics  = _make_metrics(ms, "Max Sharpe")
+        mv_metrics  = _make_metrics(_mv_res, "Min Volatilità")
+        bl_metrics  = _make_metrics(_bl_res, "Black-Litterman")
+
+        # Converti grafico in PNG
+        _fe_png = None
+        try:
+            from utils.exporter import plotly_to_png
+            _fe_png = plotly_to_png(fig_fe)
+        except Exception:
+            pass
+
+        # ── Riga 1: PDF completo + Excel standard ─────────────────────────
+        ex1, ex2 = st.columns(2)
+
+        if ms and "error" not in ms:
             pdf_bytes = export_portfolio_pdf(
-                ms["weights"], metrics,
-                title="Portafoglio Max Sharpe",
+                weights=ms["weights"],
+                metrics=ms_metrics,
+                title="Report Portafogli Efficienti",
                 chart_bytes=_fe_png,
                 fund_df=df_unified if not df_unified.empty else None,
                 fund_pool=_all_fund_pool,
+                weights_minvol=_mv_res.get("weights") if "error" not in _mv_res else None,
+                metrics_minvol=mv_metrics or None,
+                weights_bl=_bl_res.get("weights") if "error" not in _bl_res else None,
+                metrics_bl=bl_metrics or None,
+                bl_views=_bl_views_used or None,
             )
             if pdf_bytes:
-                exp_c2.download_button(
-                    "📄 Esporta PDF (Max Sharpe)", data=pdf_bytes,
-                    file_name=f"portafoglio_max_sharpe_{datetime.now().strftime('%Y%m%d')}.pdf",
+                ex1.download_button(
+                    "📄 PDF completo (3 portafogli)",
+                    data=pdf_bytes,
+                    file_name=f"report_portafogli_{_today}.pdf",
                     mime="application/pdf",
+                    use_container_width=True,
                 )
+
+            excel_bytes = export_portfolio_excel(
+                ms["weights"], ms_metrics,
+                fund_df=df_unified if not df_unified.empty else None,
+                price_dict=price_dict, title="Max Sharpe",
+            )
+            ex2.download_button(
+                "📊 Excel (Max Sharpe)",
+                data=excel_bytes,
+                file_name=f"portafoglio_max_sharpe_{_today}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+        # ── Riga 2: AdvisorElite ──────────────────────────────────────────
+        st.markdown("**AdvisorElite**")
+        ae1, ae2, ae3, ae4 = st.columns(4)
+
+        def _ae_buttons(col, label: str, pdata: dict, suffix: str):
+            if not pdata or "error" in pdata:
+                col.info(f"{label}\nnon disponibile")
+                return
+            w = {k: v for k, v in pdata["weights"].items() if v > 0.0001}
+            csv_b = export_advisorelite_csv(w)
+            col.download_button(
+                f"📋 CSV\n{label}",
+                data=csv_b,
+                file_name=f"advisorelite_{suffix}_{_today}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        def _ae_excel_buttons(col, label: str, pdata: dict, suffix: str):
+            if not pdata or "error" in pdata:
+                return
+            w = {k: v for k, v in pdata["weights"].items() if v > 0.0001}
+            xls_b = export_advisorelite_excel(
+                w, portfolio_name=label, fund_pool=_all_fund_pool
+            )
+            if xls_b:
+                col.download_button(
+                    f"📗 Excel\n{label}",
+                    data=xls_b,
+                    file_name=f"advisorelite_{suffix}_{_today}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+
+        _ae_buttons(ae1,      "Max Sharpe",        ms,      "max_sharpe")
+        _ae_buttons(ae2,      "Min Volatilità",     _mv_res, "min_vol")
+        _ae_buttons(ae3,      "Black-Litterman",    _bl_res, "bl")
+        _ae_excel_buttons(ae4, "Max Sharpe",        ms,      "max_sharpe")
+
+        st.caption(
+            "📌 Il file CSV AdvisorElite contiene ISIN e % peso (somma = 100). "
+            "Il file Excel segue il formato virtual-positions-template."
+        )
 
 
 # ===========================================================================
