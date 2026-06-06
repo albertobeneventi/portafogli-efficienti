@@ -606,21 +606,18 @@ if nav == "🏠 Home":
 # ===========================================================================
 elif nav == "📈 Frontiera Efficiente":
     st.title("📈 Frontiera Efficiente")
-    st.markdown(
-        "Costruisci un portafoglio ottimizzato. "
-        "**Step 1**: scegli gli strumenti (o usa l'auto-selezione per asset class) → "
-        "**Step 2**: vincoli → **Step 3**: calcola."
+    st.caption(
+        "Configura allocazione, numero di strumenti e vincoli — "
+        "l'app seleziona automaticamente i migliori fondi/ETF e calcola "
+        "Max Sharpe, Min Volatilità e Black-Litterman in un clic."
     )
 
-    # ── POOL GLOBALE asset disponibili ─────────────────────────────────────
+
+    # ── POOL GLOBALE (interno) ───────────────────────────────────────────────
     from utils.etf_tickers import (get_dividend_stocks_df, DIVIDEND_STOCKS,
                                     ITALIAN_STOCKS, ISIN_TO_TICKER)
     from utils.etf_static import ETF_STATIC as _ETF_STATIC_LIST
 
-    if "fe_selected_isins" not in st.session_state:
-        st.session_state["fe_selected_isins"] = []
-
-    # Costruisce pool completo una sola volta per pagina
     _all_fund_pool: dict = {}
     _etf_nome_map = {e["isin"]: e["nome"] for e in _ETF_STATIC_LIST}
 
@@ -641,787 +638,343 @@ elif nav == "📈 Frontiera Efficiente":
         df_etf_fe = _load_etf_universe_cached()
         _pool_from_df(df_etf_fe)
     except Exception:
-        df_etf_fe = pd.DataFrame()
-        # fallback: usa static
         from utils.etf_static import get_static_etf_df
         df_etf_fe = get_static_etf_df()
         _pool_from_df(df_etf_fe)
 
-    # Aggiungi azioni italiane e dividend
     for _isin, _info in ITALIAN_STOCKS.items():
         _pool_add(_isin, {"isin": _isin, "nome": _info["nome"],
-                          "classificazione": f"Azione — {_info['settore']}",
+                          "classificazione": f"Azione \u2014 {_info['settore']}",
                           "ticker": _info["ticker"]})
     for _isin, _info in DIVIDEND_STOCKS.items():
         _pool_add(_isin, {"isin": _isin, "nome": _info["nome"],
-                          "classificazione": f"Dividendo — {_info['settore']} ({_info['paese']})",
+                          "classificazione": f"Dividendo \u2014 {_info['settore']} ({_info['paese']})",
                           "ticker": _info["ticker"]})
 
-    # Arricchisce il pool con TUTTI i fondi già in selezione ma non ancora nel pool
-    # (es. fondi Azimut auto-aggiunti che non sono in lista_a/lista_b)
-    if not df_unified.empty and st.session_state.get("fe_selected_isins"):
-        _missing = [
-            i for i in st.session_state["fe_selected_isins"]
-            if i not in _all_fund_pool
-        ]
-        if _missing:
-            _missing_set = set(_missing)
-            for _, _r in df_unified[df_unified["isin"].isin(_missing_set)].iterrows():
-                _pool_add(str(_r["isin"]), _r.to_dict())
-
-    # helper: label leggibile per un ISIN
-    def _label(isin: str) -> str:
-        nome = _all_fund_pool.get(isin, {}).get("nome", isin)
-        return f"{isin} — {str(nome)[:50]}"
-
-    # ── STEP 1: SELEZIONE ──────────────────────────────────────────────────
-    st.subheader("1️⃣ Seleziona strumenti")
-
-    fe_tab_a, fe_tab_b, fe_tab_c, fe_tab_it, fe_tab_div, fe_tab_isin = st.tabs([
-        "📋 Generalisti", "🎯 Tematici", "🌐 ETF",
-        "🇮🇹 Titoli Italiani", "💰 Dividend", "✏️ ISIN/Ticker libero"
-    ])
-
-    # ── Funzione generica di selezione con data_editor ──────────────────────
-    def _selection_tab(df: pd.DataFrame, tab_key: str, display_cols: list,
-                       col_cfg: dict | None = None, empty_msg: str = "Nessun dato."):
-        """
-        Tabella con checkbox editabile direttamente.
-        Usa st.data_editor: spunta ✅ la riga → viene aggiunta alla selezione.
-        Pulsante "Applica" conferma le modifiche.
-        """
-        if df is None or df.empty:
-            st.info(empty_msg)
-            return
-
-        srch = st.text_input("🔍 Cerca", key=f"srch_{tab_key}",
-                              placeholder="nome, ISIN, categoria…")
-        show_df = df.copy()
-        if srch:
-            m = show_df.apply(
-                lambda c: c.astype(str).str.contains(srch, case=False, na=False)
-            ).any(axis=1)
-            show_df = show_df[m]
-
-        # Costruisce df da mostrare con colonna Seleziona editabile
-        show_cols = [c for c in display_cols if c in show_df.columns]
-        disp = show_df[show_cols].copy().head(200).reset_index(drop=True)
-        # Colonna checkbox precompilata con stato attuale
-        if "isin" in disp.columns:
-            disp.insert(0, "Seleziona",
-                        disp["isin"].isin(st.session_state["fe_selected_isins"]))
-
-        # Column config
-        cfg: dict = {
-            "Seleziona": st.column_config.CheckboxColumn(
-                "✅", width="small",
-                help="Spunta per aggiungere al portafoglio",
-            ),
-        }
-        # Rendi non-editabili tutte le colonne tranne "Seleziona"
-        for c in show_cols:
-            if c == "isin":
-                cfg[c] = st.column_config.TextColumn("ISIN", width="small", disabled=True)
-            elif c == "nome":
-                cfg[c] = st.column_config.TextColumn("Nome", width="large", disabled=True)
-            elif c not in (col_cfg or {}):
-                cfg[c] = st.column_config.TextColumn(c.replace("_"," ").title(), disabled=True)
-        # col_cfg sovrascrive (già con disabled=True impostato dal chiamante)
-        if col_cfg:
-            cfg.update(col_cfg)
-
-        edited = st.data_editor(
-            disp,
-            use_container_width=True,
-            hide_index=True,
-            column_config=cfg,
-            height=300,
-            key=f"de_{tab_key}",
-            disabled=[c for c in show_cols],   # solo "Seleziona" è editabile
-        )
-
-        # Confronta checkbox prima/dopo per trovare variazioni
-        if "Seleziona" in edited.columns and "isin" in edited.columns:
-            checked   = set(edited[edited["Seleziona"] == True]["isin"].tolist())
-            unchecked = set(edited[edited["Seleziona"] == False]["isin"].tolist())
-            prev_sel  = set(st.session_state["fe_selected_isins"])
-            new_add   = checked - prev_sel
-            new_rem   = unchecked & prev_sel
-
-            if new_add or new_rem:
-                btn_lbl = []
-                if new_add: btn_lbl.append(f"➕ {len(new_add)} aggiunti")
-                if new_rem: btn_lbl.append(f"➖ {len(new_rem)} rimossi")
-                if st.button(
-                    "✅ Applica selezione  ·  " + "  ".join(btn_lbl),
-                    key=f"apply_{tab_key}",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    for isin in new_add:
-                        if isin not in st.session_state["fe_selected_isins"]:
-                            st.session_state["fe_selected_isins"].append(isin)
-                    st.session_state["fe_selected_isins"] = [
-                        i for i in st.session_state["fe_selected_isins"]
-                        if i not in new_rem
-                    ]
-                    if new_add:
-                        st.toast(f"✅ Aggiunti {len(new_add)} strumenti")
-                    if new_rem:
-                        st.toast(f"🗑️ Rimossi {len(new_rem)} strumenti")
-                    st.rerun()
-            else:
-                n_sel = len(checked & prev_sel)
-                if n_sel:
-                    st.caption(f"✅ {n_sel} strument{'o' if n_sel==1 else 'i'} selezionat{'o' if n_sel==1 else 'i'} in questa lista")
-
-    FUND_COLS = ["isin", "nome", "classificazione", "perf_1y", "perf_3y", "volatilita", "rating_fida"]
-    ETF_COLS  = ["isin", "nome", "categoria", "ter", "perf_1y", "perf_3y"]
-    IT_COLS   = ["isin", "ticker", "nome", "settore"]
-    DIV_COLS  = ["isin", "ticker", "nome", "settore", "paese", "div_yield_est"]
-
-    _FUND_CFG = {
-        "classificazione": st.column_config.TextColumn("Classificazione", disabled=True),
-        "perf_1y":  st.column_config.NumberColumn("Perf 1Y %", format="%.1f", disabled=True),
-        "perf_3y":  st.column_config.NumberColumn("Perf 3Y %", format="%.1f", disabled=True),
-        "volatilita": st.column_config.NumberColumn("Vol %", format="%.1f", disabled=True),
-        "rating_fida": st.column_config.NumberColumn("★ FIDA", format="%d", disabled=True),
-    }
-    _ETF_CFG = {
-        "categoria": st.column_config.TextColumn("Categoria", disabled=True),
-        "ter":    st.column_config.NumberColumn("TER %", format="%.2f", disabled=True),
-        "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.1f", disabled=True),
-        "perf_3y": st.column_config.NumberColumn("Perf 3Y %/a", format="%.1f", disabled=True),
-    }
-    _IT_CFG = {
-        "ticker":  st.column_config.TextColumn("Ticker", width="small", disabled=True),
-        "settore": st.column_config.TextColumn("Settore", disabled=True),
-    }
-    _DIV_CFG = {
-        "ticker":  st.column_config.TextColumn("Ticker", width="small", disabled=True),
-        "settore": st.column_config.TextColumn("Settore", disabled=True),
-        "paese":   st.column_config.TextColumn("Paese", width="small", disabled=True),
-        "div_yield_est": st.column_config.NumberColumn("Yield % (stima)", format="%.1f", disabled=True),
+    # ETF fallback per asset class
+    _ETF_FALLBACK = {
+        "Azioni":        ["IE00B4L5Y983","IE00BK5BQT80","IE00B5BMR087",
+                          "LU0908500753","IE00BKM4GZ66"],
+        "Obbligazioni":  ["IE00B4WXJJ64","IE00B3F81R35","IE00B66F4759",
+                          "IE00B2NPKV68","IE00B3T9LM79"],
+        "Bilanciato":    ["IE00B4L5Y983","IE00B4WXJJ64"],
+        "Materie Prime": ["IE00BD6FTQ80","LU1829218749","GB00B15KXQ89"],
     }
 
-    with fe_tab_a:
-        if lista_a.empty:
-            st.warning("Carica i file Excel per vedere i Fondi Generalisti.")
-        else:
-            _selection_tab(lista_a, "A", FUND_COLS, col_cfg=_FUND_CFG)
+    import re as _re
+    _CLASS_TO_MACRO = [
+        ("Materie Prime", ["materie prime","commodity","commodities","energy",
+                           "metals","oro","gold","petrolio","oil"]),
+        ("Obbligazioni",  ["obbligazionari","obbligazionario","bond",
+                           "fixed income","reddito fisso","high yield",
+                           "corporate bond","government bond","duration"]),
+        ("Bilanciato",    ["bilanciati","bilanciato","balanced","flessibili",
+                           "flessibile","multi-asset","allocation","ritorno assoluto"]),
+        ("Azioni",        ["azionari","azionario","equity","azioni","stock",
+                           "tematici","tematico","small cap","large cap","dividend"]),
+    ]
 
-    with fe_tab_b:
-        if lista_b.empty:
-            st.warning("Carica i file Excel per vedere i Fondi Tematici.")
-        else:
-            _selection_tab(lista_b, "B", FUND_COLS, col_cfg=_FUND_CFG)
+    def _macro_from_class(cl):
+        cl = str(cl).lower()
+        for macro, kws in _CLASS_TO_MACRO:
+            for kw in kws:
+                if _re.search(r"(?<![a-z])" + _re.escape(kw) + r"(?![a-z])", cl):
+                    return macro
+        return None
 
-    with fe_tab_c:
-        _selection_tab(df_etf_fe, "C", ETF_COLS, col_cfg=_ETF_CFG,
-                       empty_msg="ETF Universe non caricato.")
-
-    with fe_tab_it:
-        st.caption("Titoli FTSE MIB — prezzi storici via yfinance (ticker .MI)")
-        df_it = pd.DataFrame([
-            {"isin": isin, "ticker": d["ticker"], "nome": d["nome"],
-             "settore": d["settore"]}
-            for isin, d in ITALIAN_STOCKS.items()
-            if not isin.startswith("IT_BTP")
-        ])
-        _pool_from_df(df_it)
-        _selection_tab(df_it, "IT", IT_COLS, col_cfg=_IT_CFG,
-                       empty_msg="Nessun titolo italiano.")
-
-    with fe_tab_div:
-        st.caption("Top 30 azioni non-USA — Fonte: TDIV/EUDV. Yield stimato, verificare su Yahoo Finance.")
-        df_div = get_dividend_stocks_df()
-        _pool_from_df(df_div)
-        _fc1, _fc2 = st.columns(2)
-        _fp = _fc1.selectbox("Paese", ["Tutti"]+sorted(df_div["paese"].unique().tolist()), key="dp_paese")
-        _fs = _fc2.selectbox("Settore", ["Tutti"]+sorted(df_div["settore"].unique().tolist()), key="dp_sett")
-        df_div_f = df_div.copy()
-        if _fp != "Tutti": df_div_f = df_div_f[df_div_f["paese"] == _fp]
-        if _fs != "Tutti": df_div_f = df_div_f[df_div_f["settore"] == _fs]
-        _selection_tab(df_div_f.reset_index(drop=True), "DIV", DIV_COLS, col_cfg=_DIV_CFG)
-
-    with fe_tab_isin:
-        st.markdown("""
-| Tipo | Esempi | Fonte |
-|------|--------|-------|
-| ETF (ISIN) | `IE00B4L5Y983` | yfinance ticker map |
-| Azioni italiane | `ENI.MI`, `ISP.MI` | yfinance diretto |
-| Azioni USA | `AAPL`, `MSFT`, `NVDA` | yfinance diretto |
-| Azioni EU | `ADS.DE`, `ASML.AS` | yfinance diretto |
-| Fondi (ISIN) | `LU0048578792` | Morningstar/FondiDoc |
-| BTP proxy | `IBTS.MI` | yfinance diretto |
-""")
-        custom_raw = st.text_area("ISIN / Ticker (uno per riga)", height=100,
-                                  key="fe_custom_raw",
-                                  placeholder="ENI.MI\nAAPL\nNVDA\nIE00B4L5Y983")
-        if st.button("➕ Aggiungi", key="add_custom", type="primary"):
-            from utils.nav_fetcher import classify_asset_type
-            added_info = []
-            for line in custom_raw.strip().split("\n"):
-                token = line.strip().upper()
-                if not token:
-                    continue
-                if token not in st.session_state["fe_selected_isins"]:
-                    st.session_state["fe_selected_isins"].append(token)
-                if token not in _all_fund_pool:
-                    if token in ITALIAN_STOCKS:
-                        d = ITALIAN_STOCKS[token]
-                        _pool_add(token, {"isin": token, "nome": d["nome"],
-                                          "classificazione": f"Azione — {d['settore']}",
-                                          "ticker": d["ticker"]})
-                    elif token in _etf_nome_map:
-                        _pool_add(token, {"isin": token, "nome": _etf_nome_map[token],
-                                          "classificazione": "ETF",
-                                          "ticker": ISIN_TO_TICKER.get(token, "")})
-                    else:
-                        _pool_add(token, {"isin": token, "nome": token,
-                                          "classificazione": classify_asset_type(token)})
-                added_info.append(f"**{token}** — {_all_fund_pool.get(token,{}).get('nome',token)}")
-            if added_info:
-                st.toast(f"✅ Aggiunti {len(added_info)} strumenti")
-                for m in added_info: st.markdown(f"- {m}")
-            st.rerun()
-
-    # ── AUTO-SELEZIONE PER ASSET CLASS ─────────────────────────────────────
-    st.markdown("---")
-    with st.expander("🎯 Auto-composizione per Asset Class", expanded=False):
-        st.markdown(
-            "Indica la % target per macro asset class. "
-            "L'app selezionerà i **migliori fondi per Score Qualità** (Liste A/B) "
-            "e/o gli **ETF rappresentativi** (Lista C), poi ottimizzerà i pesi "
-            "rispettando l'allocazione richiesta."
-        )
-
-        # ── Sorgente dati ─────────────────────────────────────────────────
-        _opt_c1, _opt_c2, _opt_c3 = st.columns(3)
-        use_funds = _opt_c1.checkbox(
-            "Includi fondi (Liste A/B) oltre agli ETF",
-            value=True, key="ac_use_funds",
-            help="Se attivo usa i fondi per Score Qualità; se disattivo usa solo ETF Lista C",
-        )
-        prefer_funds = _opt_c2.checkbox(
-            "Preferisci fondi agli ETF (se disponibili)",
-            value=True, key="ac_prefer_funds",
-            disabled=not use_funds,
-        )
-
-        # Conta fondi Azimut disponibili — solo per info, NON blocca il campo
-        _n_az_avail = 0
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _get_azimut_ranked(azimut_json: str) -> list:
+        import io as _io2
+        from utils.scoring import compute_scores_df as _css2
+        from utils.data_loader import build_unified_fund_df as _buf
         try:
-            if not df_azimut.empty:
-                _n_az_avail = len(df_azimut)
-            elif not df_unified.empty and "_source" in df_unified.columns:
-                _n_az_avail = int((df_unified["_source"] == "azimut").sum())
+            _az_df = pd.read_json(_io2.StringIO(azimut_json), orient="records")
+            if _az_df.empty: return []
+            _az_u = _buf(pd.DataFrame(), _az_df)
+            if _az_u.empty: return []
+            _az_u = _css2(_az_u)
+            return _az_u.sort_values("score_qualita", ascending=False)["isin"].dropna().tolist()
         except Exception:
-            pass
+            return []
 
-        n_min_az_ac = _opt_c3.number_input(
-            "Min fondi Azimut",
-            min_value=0,
-            max_value=50,   # limite alto fisso — non dipende dal pool
-            value=0, step=1,
-            key="ac_n_min_az",
-            help=(
-                f"Inserisci quanti fondi Azimut vuoi garantire nel portafoglio "
-                f"({_n_az_avail} disponibili nel catalogo caricato). "
-                "La ricerca avviene nel catalogo completo Azimut per Score Qualità, "
-                "indipendentemente dalle liste preselezionate."
-            ),
-            disabled=False,  # SEMPRE editabile
-        )
-        if _n_az_avail > 0:
-            _opt_c3.caption(f"📘 {_n_az_avail} fondi Azimut nel catalogo")
+    _MONETARY_KW = ["money market","monetari","monetario","cash",
+                    "insticash","overnight","liquidit","lvnav","vnav"]
+
+    def _is_monetary(cl: str, nome: str) -> bool:
+        t = (str(cl) + " " + str(nome)).lower()
+        return any(k in t for k in _MONETARY_KW)
+
+    def _pick_assets(macro: str, n: int, use_f: bool, prefer_f: bool) -> list:
+        fund_candidates = []
+        if use_f and not df_unified.empty:
+            from utils.scoring import compute_scores_df
+            _fu = compute_scores_df(df_unified.copy())
+            _fu["_macro_auto"] = _fu["classificazione"].apply(_macro_from_class)
+            _fu = _fu[_fu["_macro_auto"] == macro]
+            _fu = _fu[~_fu.apply(
+                lambda r: _is_monetary(r.get("classificazione",""), r.get("nome","")), axis=1
+            )]
+            _fu = _fu.sort_values("score_qualita", ascending=False)
+            for _, _r in _fu.iterrows():
+                _isin_r = str(_r.get("isin",""))
+                if _isin_r:
+                    _pool_add(_isin_r, _r.to_dict())
+            _seen: set = set()
+            for _, r in _fu.iterrows():
+                casa = str(r.get("casa",""))
+                if casa and casa in _seen: continue
+                fund_candidates.append(r["isin"])
+                if casa: _seen.add(casa)
+                if len(fund_candidates) >= n * 3: break
+
+        etf_candidates = _ETF_FALLBACK.get(macro, [])
+        if prefer_f and fund_candidates:
+            selected = fund_candidates[:n]
+            for e in etf_candidates:
+                if e not in selected and len(selected) < n:
+                    selected.append(e)
+        elif fund_candidates and not prefer_f:
+            half = n // 2
+            selected = fund_candidates[:half]
+            for e in etf_candidates:
+                if e not in selected and len(selected) < n:
+                    selected.append(e)
         else:
-            _opt_c3.caption("⚠️ Carica il file Azimut dalla sidebar")
+            selected = etf_candidates[:n]
+        return selected
 
-        # ── Sliders allocazione ───────────────────────────────────────────
-        ac1, ac2, ac3 = st.columns(3)
-        pct_az  = ac1.slider("Azioni %",         0, 100, 60, 5, key="ac_az")
-        pct_ob  = ac2.slider("Obbligazioni %",    0, 100, 30, 5, key="ac_ob")
-        pct_mp  = ac3.slider("Materie Prime %",   0, 100, 10, 5, key="ac_mp")
-        total_ac = pct_az + pct_ob + pct_mp
-        if total_ac != 100:
-            st.warning(f"Totale: {total_ac}% — deve essere 100%")
-        else:
-            st.success(f"✅ {pct_az}% Azioni + {pct_ob}% Obbligazioni + {pct_mp}% Materie Prime")
-
-        n_az = ac1.number_input("N. strumenti azionari",      2, 8, 4, key="n_az")
-        n_ob = ac2.number_input("N. strumenti obbligazionari", 2, 8, 4, key="n_ob")
-        n_mp = ac3.number_input("N. strumenti commodity",      1, 4, 2, key="n_mp")
-
-        # ── Logica di selezione ───────────────────────────────────────────
-        # ETF fallback per asset class
-        _ETF_FALLBACK = {
-            "Azioni": [
-                "IE00B4L5Y983",  # MSCI World
-                "IE00BK5BQT80",  # FTSE All-World
-                "IE00B5BMR087",  # S&P 500
-                "LU0908500753",  # Stoxx 600
-                "IE00BKM4GZ66",  # EM IMI
-            ],
-            "Obbligazioni": [
-                "IE00B4WXJJ64",  # Euro Govt
-                "IE00B3F81R35",  # EUR Corp
-                "IE00B66F4759",  # EUR HY
-                "IE00B2NPKV68",  # EM Bond
-                "IE00B3T9LM79",  # BTP
-            ],
-            "Materie Prime": [
-                "IE00BD6FTQ80",  # Bloomberg Commodity
-                "LU1829218749",  # Commodity ex-Agri
-                "GB00B15KXQ89",  # Copper
-                "GB00B15KXV33",  # WTI Oil
-            ],
-        }
-
-        # Mappa classificazione → macro-bucket con word-boundary (evita "azionari" in "obbligazionari")
-        import re as _re
-        _CLASS_TO_MACRO_ORDERED = [
-            # Materie Prime prima (termini univoci)
-            ("Materie Prime", ["materie prime", "commodity", "commodities",
-                               "energy", "metals", "agriculture", "oro", "gold",
-                               "petrolio", "oil", "gas"]),
-            # Obbligazioni — escluso monetario (gestito separatamente)
-            ("Obbligazioni",  ["obbligazionari", "obbligazionario", "bond",
-                               "fixed income", "reddito fisso", "high yield",
-                               "corporate bond", "government bond", "duration",
-                               "inflation linked"]),
-            # Azioni per ultima
-            ("Azioni",        ["azionari", "azionario", "equity", "azioni", "stock",
-                               "tematici", "tematico", "growth fund",
-                               "small cap", "large cap", "dividend"]),
-        ]
-
-        def _macro_from_class(classificazione: str) -> str | None:
-            cl = str(classificazione).lower()
-            for macro, keywords in _CLASS_TO_MACRO_ORDERED:
-                for kw in keywords:
-                    # Word-boundary: il keyword non deve essere parte di un'altra parola
-                    pattern = r"(?<![a-z])" + _re.escape(kw) + r"(?![a-z])"
-                    if _re.search(pattern, cl):
-                        return macro
-            return None
-
-        def _pick_assets(macro: str, n: int,
-                          use_f: bool, prefer_f: bool) -> tuple[list, list]:
-            """
-            Ritorna (lista_isins, lista_macro_label) con i migliori N strumenti
-            per il macro-bucket richiesto.
-            Prima tenta con i fondi (se use_f), poi completa con ETF fallback.
-            """
-            selected = []
-            labels   = []
-
-            # ── Keyword per identificare i monetari (da escludere sempre) ─
-            _MONETARY_KW = ["money market", "monetari", "monetario", "cash",
-                            "insticash", "overnight", "liquidit", "lvnav", "vnav"]
-            def _is_monetary(cl: str, nome: str) -> bool:
-                t = (str(cl) + " " + str(nome)).lower()
-                return any(k in t for k in _MONETARY_KW)
-
-            # ── FONDI da df_unified ──────────────────────────────────────
-            fund_candidates = []
-            if use_f and not df_unified.empty:
-                from utils.scoring import compute_scores_df
-                _fu = df_unified.copy()
-                _fu = compute_scores_df(_fu)
-                _fu["_macro_auto"] = _fu["classificazione"].apply(_macro_from_class)
-                _fu = _fu[_fu["_macro_auto"] == macro].copy()
-                # Escludi sempre i monetari (vol~0, score distorto)
-                _fu = _fu[~_fu.apply(
-                    lambda r: _is_monetary(r.get("classificazione",""), r.get("nome","")), axis=1
-                )]
-                _fu = _fu.sort_values("score_qualita", ascending=False)
-                # Aggiorna pool con score calcolato
-                for _, _r in _fu.iterrows():
-                    _isin_r = str(_r.get("isin",""))
-                    if _isin_r and _isin_r in _all_fund_pool:
-                        _all_fund_pool[_isin_r]["score_qualita"] = _r.get("score_qualita", 0)
-                    elif _isin_r:
-                        _pool_add(_isin_r, _r.to_dict())
-                # Diversificazione: max 1 per casa
-                _seen_casa: set = set()
-                for _, r in _fu.iterrows():
-                    casa = str(r.get("casa", ""))
-                    if casa and casa in _seen_casa:
-                        continue
-                    fund_candidates.append(r["isin"])
-                    if casa:
-                        _seen_casa.add(casa)
-                    if len(fund_candidates) >= n * 3:
-                        break
-
-            # ── ETF fallback ──────────────────────────────────────────────
-            etf_candidates = _ETF_FALLBACK.get(macro, [])
-
-            if prefer_f and fund_candidates:
-                # Priorità ai fondi, completa con ETF se non bastano
-                selected = fund_candidates[:n]
-                if len(selected) < n:
-                    for e in etf_candidates:
-                        if e not in selected and len(selected) < n:
-                            selected.append(e)
-            elif fund_candidates and not prefer_f:
-                # Misto: metà fondi, metà ETF
-                half = n // 2
-                selected = fund_candidates[:half]
-                for e in etf_candidates:
-                    if e not in selected and len(selected) < n:
-                        selected.append(e)
-            else:
-                # Solo ETF
-                selected = etf_candidates[:n]
-
-            labels = [macro] * len(selected)
-            return selected, labels
-
-        # ── Costruzione pool Azimut al momento della composizione ────────
-        # (non pre-costruito, evita problemi di disponibilità)
-        @st.cache_data(ttl=3600, show_spinner=False)
-        def _get_azimut_ranked(azimut_json: str) -> list:
-            """Ritorna lista ISIN Azimut ordinata per score qualità."""
-            import io as _io2
-            from utils.scoring import compute_scores_df as _css2
-            from utils.data_loader import build_unified_fund_df as _buf
+    def _inject_azimut(selected: list, n_min: int) -> tuple:
+        if n_min <= 0:
+            return selected, []
+        _az_ranked = []
+        if not df_azimut.empty:
             try:
-                _az_df = pd.read_json(_io2.StringIO(azimut_json), orient="records")
-                if _az_df.empty:
-                    return []
-                _az_u = _buf(pd.DataFrame(), _az_df)
-                if _az_u.empty:
-                    return []
-                _az_u = _css2(_az_u)
-                _az_u = _az_u.sort_values("score_qualita", ascending=False)
-                return _az_u["isin"].dropna().tolist()
+                _az_ranked = _get_azimut_ranked(df_azimut.to_json(orient="records"))
             except Exception:
-                return []
+                pass
+        if not _az_ranked and not df_unified.empty and "_source" in df_unified.columns:
+            _az_ranked = df_unified[df_unified["_source"]=="azimut"]["isin"].dropna().tolist()
+        if not _az_ranked:
+            return selected, []
+        _az_already = [i for i in selected if i in set(_az_ranked)]
+        _need = n_min - len(_az_already)
+        _result = list(selected)
+        _forced = list(_az_already[:n_min])
+        for _az_i in _az_ranked:
+            if _need <= 0: break
+            if _az_i not in _result:
+                _result.append(_az_i)
+                _forced.append(_az_i)
+                _need -= 1
+        for _isin in _forced:
+            if _isin not in _all_fund_pool and not df_unified.empty:
+                _rw = df_unified[df_unified["isin"]==_isin]
+                if not _rw.empty:
+                    _pool_add(_isin, _rw.iloc[0].to_dict())
+        return _result, _forced
 
-        # ── Funzione di inserimento fondi Azimut garantiti ────────────────
-        def _inject_azimut(selected: list, n_min: int, macro: str) -> list:
-            """
-            Garantisce almeno n_min fondi Azimut nella lista.
-            Cerca nel catalogo completo df_azimut ordinato per Score Qualità.
-            """
-            if n_min <= 0:
-                return selected
+    # Conteggio fondi Azimut disponibili
+    _n_az_avail = 0
+    try:
+        if not df_azimut.empty:
+            _n_az_avail = len(df_azimut)
+        elif not df_unified.empty and "_source" in df_unified.columns:
+            _n_az_avail = int((df_unified["_source"]=="azimut").sum())
+    except Exception:
+        pass
 
-            # Costruisce il pool Azimut al momento (da df_azimut completo)
-            _az_ranked = []
-            if not df_azimut.empty:
-                try:
-                    _az_ranked = _get_azimut_ranked(df_azimut.to_json(orient="records"))
-                except Exception:
-                    pass
-            # Fallback su df_unified
-            if not _az_ranked and not df_unified.empty and "_source" in df_unified.columns:
-                _az_ranked = df_unified[df_unified["_source"] == "azimut"]["isin"].dropna().tolist()
+    # =========================================================================
+    # FORM GUIDATO
+    # =========================================================================
+    _prev = st.session_state.get("_fe_form_vals", {})
 
-            if not _az_ranked:
-                return selected  # nessun fondo Azimut disponibile
+    with st.form("fe_guided_form", clear_on_submit=False):
 
-            _az_already = [i for i in selected if i in set(_az_ranked)]
-            _need = n_min - len(_az_already)
-            if _need <= 0:
-                return selected
-            _result = list(selected)
-            for _az_i in _az_ranked:
-                if _need <= 0:
-                    break
-                if _az_i not in _result:
-                    _result.append(_az_i)
-                    _need -= 1
-            return _result
+        # Step 1: Allocazione
+        st.markdown("**1 \u2014 Allocazione target (%)**")
+        _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+        _pct_az = _ac1.number_input("Azioni %",        0, 100, _prev.get("pct_az", 60), 5)
+        _pct_ob = _ac2.number_input("Obbligazioni %",  0, 100, _prev.get("pct_ob", 30), 5)
+        _pct_bi = _ac3.number_input("Bilanciato %",    0, 100, _prev.get("pct_bi",  0), 5)
+        _pct_mp = _ac4.number_input("Materie Prime %", 0, 100, _prev.get("pct_mp", 10), 5)
+        _total_pct = int(_pct_az) + int(_pct_ob) + int(_pct_bi) + int(_pct_mp)
+        _tc, _ = st.columns([1, 3])
+        if _total_pct == 100:
+            _tc.success(f"Totale: {_total_pct}%  OK")
+        else:
+            _tc.warning(f"Totale: {_total_pct}%  (deve essere 100%)")
 
-        # ── Preview anteprima prima di confermare ──────────────────────────
-        if total_ac == 100:
-            _prev_az, _ = _pick_assets("Azioni", int(n_az), use_funds, prefer_funds)
-            _prev_az = _inject_azimut(_prev_az, int(n_min_az_ac), "Azioni")
-            _prev_ob, _ = _pick_assets("Obbligazioni", int(n_ob), use_funds, prefer_funds)
-            _prev_mp, _ = _pick_assets("Materie Prime", int(n_mp), use_funds, prefer_funds)
-            _all_prev = _prev_az + _prev_ob + _prev_mp
+        st.markdown("---")
 
-            if _all_prev:
-                st.markdown("**Anteprima selezione:**")
-                _etf_isins_set = {e["isin"] for e in _ETF_STATIC_LIST}
-                _prev_rows = []
-                for _isin in _all_prev:
-                    _info = _all_fund_pool.get(_isin, {})
-                    # Lookup in df_unified se info mancante
-                    if not _info and not df_unified.empty:
-                        _r = df_unified[df_unified["isin"] == _isin]
-                        if not _r.empty:
-                            _info = _r.iloc[0].to_dict()
-                            _pool_add(_isin, _info)
-                    _nome = str(_info.get("nome", _isin))[:55]
-                    _fonte = ("Azimut" if _info.get("_source") == "azimut"
-                              else "ETF" if _isin in _etf_isins_set else "Terzi")
-                    _macro_lbl = ("Azioni" if _isin in _prev_az
-                                  else "Obbligazioni" if _isin in _prev_ob
-                                  else "Materie Prime")
-                    _prev_rows.append({
-                        "Asset Class": _macro_lbl,
-                        "Fonte": _fonte,
-                        "ISIN": _isin,
-                        "Nome": _nome,
-                        "Score": round(float(_info.get("score_qualita", 0) or 0), 2),
-                        "Perf 3Y %": _info.get("perf_3y"),
-                        "★ FIDA": _info.get("rating_fida"),
-                    })
-                st.dataframe(
-                    pd.DataFrame(_prev_rows),
-                    use_container_width=True, hide_index=True,
-                    column_config={
-                        "Score": st.column_config.ProgressColumn(
-                            "Score Qualità", min_value=0, max_value=20, format="%.2f"),
-                        "Perf 3Y %": st.column_config.NumberColumn(format="%.1f"),
-                        "★ FIDA": st.column_config.NumberColumn(format="%d"),
-                        "Fonte": st.column_config.TextColumn("Fonte", width="small"),
-                    },
-                    height=min(450, len(_prev_rows) * 38 + 45),
-                )
-                # Riepilogo fondi Azimut nell'anteprima
-                _n_az_prev = sum(1 for r in _prev_rows if r["Fonte"] == "Azimut")
-                if _n_az_prev > 0:
-                    st.caption(f"🔵 {_n_az_prev} fondi Azimut inclusi nell'anteprima")
+        # Step 2: Strumenti
+        st.markdown("**2 \u2014 Strumenti**")
+        _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+        _n_az_str = _sc1.number_input("Strumenti azionari",       2, 12, _prev.get("n_az_str", 4), 1)
+        _n_ob_str = _sc2.number_input("Strumenti obbligazionari", 2, 12, _prev.get("n_ob_str", 4), 1)
+        _n_bi_str = _sc3.number_input("Strumenti bilanciati",     0,  8, _prev.get("n_bi_str", 0), 1,
+                                       disabled=(int(_pct_bi)==0))
+        _n_mp_str = _sc4.number_input("Strumenti Mat. Prime",     0,  6, _prev.get("n_mp_str", 2), 1,
+                                       disabled=(int(_pct_mp)==0))
+        _sf1, _sf2, _sf3 = st.columns(3)
+        _az_label = f"Min fondi Azimut  ({_n_az_avail} disponibili)" if _n_az_avail else "Min fondi Azimut"
+        _n_min_az = _sf1.number_input(_az_label, 0, max(_n_az_avail, 20),
+                                       _prev.get("n_min_az", 0), 1,
+                                       help="I migliori per Score Qualita' vengono inclusi automaticamente")
+        _use_fondi  = _sf2.checkbox("Preferisci fondi agli ETF", value=_prev.get("use_fondi", True))
+        _use_azioni = _sf3.checkbox("Includi azioni FTSE MIB",   value=_prev.get("use_azioni", False))
 
-        if st.button("🎯 Aggiungi alla selezione e ottimizza",
-                     key="auto_compose", type="primary",
-                     disabled=(total_ac != 100)):
-            az_list, az_lbl = _pick_assets("Azioni", int(n_az), use_funds, prefer_funds)
-            az_list = _inject_azimut(az_list, int(n_min_az_ac), "Azioni")
-            ob_list, ob_lbl = _pick_assets("Obbligazioni", int(n_ob), use_funds, prefer_funds)
-            mp_list, mp_lbl = _pick_assets("Materie Prime", int(n_mp), use_funds, prefer_funds)
+        st.markdown("---")
 
-            auto_isins = list(dict.fromkeys(az_list + ob_list + mp_list))
+        # Step 3: Parametri
+        st.markdown("**3 \u2014 Parametri ottimizzazione**")
+        _pc1, _pc2, _pc3 = st.columns(3)
+        _min_w_pct = _pc1.slider("Peso minimo per strumento %",  1, 15,
+                                  _prev.get("min_w_pct", 3),  1)
+        _max_w_pct = _pc2.slider("Peso massimo per strumento %", 10, 50,
+                                  _prev.get("max_w_pct", 30), 5)
+        _periodo   = _pc3.selectbox("Periodo storico (ETF/azioni)",
+                                     ["1Y", "3Y", "5Y"],
+                                     index=["1Y","3Y","5Y"].index(_prev.get("periodo","3Y")))
+        st.caption(
+            "Black-Litterman viene calcolato automaticamente usando lo Score Qualita' dei fondi. "
+            "Non sono necessari input manuali."
+        )
 
-            # Arricchisci pool per tutti gli ISIN aggiunti
-            for _isin in auto_isins:
-                if _isin not in _all_fund_pool and not df_unified.empty:
-                    _r = df_unified[df_unified["isin"] == _isin]
-                    if not _r.empty:
-                        _pool_add(_isin, _r.iloc[0].to_dict())
-                    else:
-                        _pool_add(_isin, {"isin": _isin, "nome": _isin, "classificazione": ""})
+        # Bottoni
+        _btn1, _btn2 = st.columns([3, 1])
+        _submitted  = _btn1.form_submit_button(
+            "Costruisci e calcola portafoglio",
+            type="primary", use_container_width=True,
+            disabled=(_total_pct != 100),
+        )
+        _reset_btn = _btn2.form_submit_button("Reset", use_container_width=True)
 
-            st.session_state["fe_selected_isins"] = list(dict.fromkeys(
-                st.session_state["fe_selected_isins"] + auto_isins
-            ))
-            st.session_state["fe_ac_target"] = {
-                "Azioni": pct_az / 100,
-                "Obbligazioni": pct_ob / 100,
-                "Materie Prime": pct_mp / 100,
-            }
-            st.session_state["fe_ac_map"] = (
-                {i: "Azioni" for i in az_list} |
-                {i: "Obbligazioni" for i in ob_list} |
-                {i: "Materie Prime" for i in mp_list}
-            )
-            n_fondi = sum(1 for i in auto_isins
-                          if i not in {e["isin"] for e in _ETF_STATIC_LIST})
-            n_etf   = len(auto_isins) - n_fondi
-            st.toast(f"✅ Selezionati {len(auto_isins)} strumenti "
-                     f"({n_fondi} fondi + {n_etf} ETF)")
+    # Selezione manuale avanzata
+    with st.expander("Selezione manuale avanzata", expanded=False):
+        st.caption("Aggiungi o rimuovi strumenti specifici dalla selezione.")
+        _adv_raw = st.text_area("ISIN o Ticker aggiuntivi (uno per riga)", height=80,
+                                 placeholder="ENI.MI\nAAPL\nIE00B4L5Y983",
+                                 key="fe_adv_raw")
+        _adv_remove = st.multiselect(
+            "Rimuovi dalla selezione corrente",
+            options=st.session_state.get("fe_selected_isins", []),
+            format_func=lambda x: f"{x} — {str(_all_fund_pool.get(x,{}).get('nome',x))[:45]}",
+            key="fe_adv_remove",
+        )
+        _adv_c1, _adv_c2 = st.columns(2)
+        if _adv_c1.button("Aggiungi", key="adv_add"):
+            from utils.nav_fetcher import classify_asset_type
+            for _line in (_adv_raw or "").strip().split("\n"):
+                _tok = _line.strip().upper()
+                if _tok:
+                    _cur = st.session_state.get("fe_selected_isins", [])
+                    if _tok not in _cur:
+                        _cur.append(_tok)
+                        st.session_state["fe_selected_isins"] = _cur
+                    _pool_add(_tok, {"isin": _tok, "nome": _tok,
+                                     "classificazione": classify_asset_type(_tok)})
+            st.rerun()
+        if _adv_c2.button("Rimuovi selezionati", key="adv_rem") and _adv_remove:
+            st.session_state["fe_selected_isins"] = [
+                i for i in st.session_state.get("fe_selected_isins", [])
+                if i not in _adv_remove
+            ]
             st.rerun()
 
-    # ── SELEZIONE CORRENTE ─────────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("📌 Strumenti selezionati per l'ottimizzazione")
-
-    sel_isins = st.session_state["fe_selected_isins"]
-    if sel_isins:
-        sel_rows = []
-        for isin in sel_isins:
-            info = _all_fund_pool.get(isin, {})
-            # Lookup in df_unified se info vuota o nome mancante
-            if (not info or info.get("nome") == isin) and not df_unified.empty:
-                _row = df_unified[df_unified["isin"] == isin]
-                if not _row.empty:
-                    info = _row.iloc[0].to_dict()
-                    _pool_add(isin, info)
-
-            def _fmt_num(v):
-                """Restituisce float o np.nan (mai None) per colonne numeriche."""
-                if v is None or str(v) in ("None","nan","NaN",""):
-                    return np.nan
-                try: return float(v)
-                except: return np.nan
-
-            nome = str(info.get("nome", info.get("FONDO AZIMUT", isin)))
-            if nome == isin:  # ancora senza nome
-                nome = isin
-            sel_rows.append({
-                "ISIN": isin,
-                "Nome": nome[:60],
-                "Fonte": "Azimut" if info.get("_source")=="azimut" else
-                         ("Terzi" if info.get("_source")=="terzi" else
-                          ("ETF" if info.get("_lista")=="C" else "—")),
-                "Classificazione": str(info.get("classificazione", info.get("categoria", "—"))),
-                "Perf 1Y %": _fmt_num(info.get("perf_1y")),
-                "Perf 3Y %": _fmt_num(info.get("perf_3y")),
-                "★ FIDA": info.get("rating_fida"),
-                "Volatilità %": _fmt_num(info.get("volatilita")),
-            })
-        sel_df = pd.DataFrame(sel_rows)
-        st.dataframe(sel_df, use_container_width=True, hide_index=True,
-                     column_config={
-                         "ISIN": st.column_config.TextColumn("ISIN", width="small"),
-                         "Nome": st.column_config.TextColumn("Nome / Fondo", width="large"),
-                         "Fonte": st.column_config.TextColumn("Fonte", width="small"),
-                         "Classificazione": st.column_config.TextColumn("Classificazione"),
-                         "Perf 1Y %": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
-                         "Perf 3Y %": st.column_config.NumberColumn("Perf 3Y %", format="%.2f"),
-                         "★ FIDA": st.column_config.NumberColumn("★ FIDA", format="%d"),
-                         "Volatilità %": st.column_config.NumberColumn("Vol %", format="%.2f"),
-                     },
-                     height=min(400, len(sel_rows)*38+50),
-                     )
-        # Rimuovi asset
-        to_remove = st.multiselect("Rimuovi dalla selezione",
-                                   options=sel_isins,
-                                   format_func=lambda x: f"{x} — {str(_all_fund_pool.get(x,{}).get('nome',x))[:50]}",
-                                   key="fe_remove")
-        if st.button("🗑️ Rimuovi", key="btn_remove") and to_remove:
-            st.session_state["fe_selected_isins"] = [i for i in sel_isins if i not in to_remove]
-            st.rerun()
-        if st.button("🗑️ Svuota tutto", key="btn_clear_all"):
-            st.session_state["fe_selected_isins"] = []
-            st.session_state.pop("fe_result", None)
-            st.rerun()
-    else:
-        st.info("Nessuno strumento selezionato. Usa i tab qui sopra per aggiungerne.")
-
-    # ── STEP 2: VINCOLI ────────────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("2️⃣ Vincoli di peso")
-    v_col1, v_col2, v_col3, v_col4 = st.columns(4)
-    min_w = v_col1.slider("Peso minimo per asset (%)", 0, 20,
-                           st.session_state["min_weight"]) / 100
-    max_w = v_col2.slider("Peso massimo per asset (%)", 10, 100,
-                           st.session_state["max_weight"]) / 100
-    forced_include_sel = v_col3.multiselect(
-        "Forza inclusione",
-        options=sel_isins,
-        format_func=lambda x: f"{x}",
-        key="fe_forced_include",
-    )
-    # Fondi Azimut disponibili nel pool COMPLETO (df_unified), non solo nella selezione
-    _azimut_pool = []
-    if not df_unified.empty and "_source" in df_unified.columns:
-        from utils.scoring import compute_scores_df
-        _az_df = df_unified[df_unified["_source"] == "azimut"].copy()
-        if not _az_df.empty:
-            _az_df = compute_scores_df(_az_df)
-            _az_df = _az_df.sort_values("score_qualita", ascending=False)
-            _azimut_pool = _az_df["isin"].dropna().tolist()
-
-    n_az_pool = len(_azimut_pool)
-    n_min_azimut = v_col4.number_input(
-        f"Min fondi Azimut ({n_az_pool} nel database)",
-        min_value=0,
-        max_value=max(n_az_pool, 1),
-        value=0,
-        step=1,
-        key="fe_n_min_azimut",
-        help=(
-            "Garantisce almeno N fondi Azimut nel portafoglio.\n"
-            "Se non sono già nella selezione, vengono aggiunti automaticamente "
-            "scegliendo i migliori per Score Qualità."
-        ),
-        disabled=n_az_pool == 0,
-    )
-    # Se n_min_azimut > 0: aggiunge i migliori N fondi Azimut alla selezione e a forced_include
-    if n_min_azimut > 0 and _azimut_pool:
-        _az_forced = []
-        # Prima usa quelli già nella selezione
-        _az_in_sel = [i for i in sel_isins if i in _azimut_pool]
-        _az_forced.extend(_az_in_sel[:int(n_min_azimut)])
-        # Se non bastano, aggiunge i migliori dal pool
-        for _az_isin in _azimut_pool:
-            if len(_az_forced) >= int(n_min_azimut):
-                break
-            if _az_isin not in _az_forced:
-                _az_forced.append(_az_isin)
-                # Aggiungi anche alla selezione dell'ottimizzazione
-                if _az_isin not in st.session_state["fe_selected_isins"]:
-                    st.session_state["fe_selected_isins"].append(_az_isin)
-                    # Aggiorna pool locale
-                    if _az_isin not in _all_fund_pool:
-                        _az_row = df_unified[df_unified["isin"] == _az_isin]
-                        if not _az_row.empty:
-                            _pool_add(_az_isin, _az_row.iloc[0].to_dict())
-
-        forced_include_sel = list(dict.fromkeys((forced_include_sel or []) + _az_forced))
-        _az_names = [
-            str(_all_fund_pool.get(i, {}).get("nome", i))[:35]
-            for i in _az_forced
-        ]
-        v_col4.caption(f"🔒 {', '.join(_az_names)}")
-
-    # ── STEP 2b: BLACK-LITTERMAN ───────────────────────────────────────────
-    with st.expander("🔮 Black-Litterman — aggiungi le tue view di mercato", expanded=False):
-        st.markdown("""
-**Cos'è Black-Litterman?**
-Combina i rendimenti di equilibrio di mercato (prior) con le **tue aspettative personali**
-su uno o più asset. Se pensi che l'azionario emergente renderà il 12% nei prossimi 3 anni,
-puoi inserirlo — il modello bilanicia questa view con il mercato in base alla tua confidenza.
-
-> 💡 **Quando usarlo**: hai una tesi su uno specifico asset.
-> Se non hai view particolari, usa Max Sharpe o Min Varianza.
-""")
-        use_bl = st.checkbox("✅ Abilita Black-Litterman", key="use_bl_chk")
-        bl_views: dict = {}
-        bl_conf: dict = {}
-        if use_bl:
-            if not sel_isins:
-                st.warning("Aggiungi prima gli strumenti nella sezione precedente.")
-            else:
-                st.markdown("---")
-                st.markdown("**Inserisci le tue view** — spunta solo gli asset su cui hai un'opinione:")
-                for isin in sel_isins[:15]:
-                    info_bl = _all_fund_pool.get(isin, {})
-                    nome_bl = str(info_bl.get("nome", isin))[:50]
-                    class_bl = str(info_bl.get("classificazione", info_bl.get("categoria","")))[:30]
-
-                    with st.container():
-                        c1, c2, c3 = st.columns([3, 2, 2])
-                        en = c1.checkbox(
-                            f"**{nome_bl}**",
-                            help=f"ISIN: {isin} | {class_bl}",
-                            key=f"bl_en_{isin}",
-                        )
-                        if en:
-                            bl_views[isin] = c2.number_input(
-                                "Rendimento atteso (%)",
-                                min_value=-30.0, max_value=60.0, value=8.0, step=0.5,
-                                key=f"bl_r_{isin}",
-                                help="La tua aspettativa di rendimento annuo per questo asset",
-                            )
-                            bl_conf[isin] = c3.slider(
-                                "Confidenza",
-                                min_value=0.1, max_value=1.0, value=0.5, step=0.1,
-                                key=f"bl_c_{isin}",
-                                help="1.0 = molto sicuro, 0.1 = incerto",
-                            )
-                if bl_views:
-                    st.success(
-                        f"✅ {len(bl_views)} view inserit{'a' if len(bl_views)==1 else 'e'}. "
-                        "Il portafoglio Black-Litterman apparirà nei risultati dopo il calcolo."
-                    )
-                else:
-                    st.info("Spunta almeno un asset per inserire una view.")
-
-    # ── STEP 3: CALCOLO ────────────────────────────────────────────────────
-    st.markdown("---")
-    run_c1, run_c2 = st.columns([1, 4])
-    run = run_c1.button("🚀 Calcola Frontiera", type="primary", use_container_width=True)
-    if run_c2.button("🔄 Reset risultati", use_container_width=False):
-        st.session_state.pop("fe_result", None)
-        st.session_state.pop("fe_price_dict", None)
+    # Reset
+    if _reset_btn:
+        for _k in ["fe_result","fe_price_dict","bl_result","bl_views_used",
+                   "fe_selected_isins","fe_ac_map","fe_ac_target","_fe_form_vals"]:
+            st.session_state.pop(_k, None)
+        st.toast("Reset completato")
         st.rerun()
+
+    # Variabili per il blocco optimizer (sotto)
+    run = False
+    _prev_vals = st.session_state.get("_fe_form_vals", {})
+    min_w = _prev_vals.get("min_w_pct", 3) / 100
+    max_w = _prev_vals.get("max_w_pct", 30) / 100
+    sel_isins = st.session_state.get("fe_selected_isins", [])
+    forced_include_sel: list = []
+    use_bl = False
+    bl_views: dict = {}
+    bl_conf: dict = {}
+
+    if _submitted and _total_pct == 100:
+        st.session_state["_fe_form_vals"] = {
+            "pct_az": int(_pct_az), "pct_ob": int(_pct_ob),
+            "pct_bi": int(_pct_bi), "pct_mp": int(_pct_mp),
+            "n_az_str": int(_n_az_str), "n_ob_str": int(_n_ob_str),
+            "n_bi_str": int(_n_bi_str), "n_mp_str": int(_n_mp_str),
+            "n_min_az": int(_n_min_az),
+            "use_fondi": bool(_use_fondi), "use_azioni": bool(_use_azioni),
+            "min_w_pct": int(_min_w_pct), "max_w_pct": int(_max_w_pct),
+            "periodo": str(_periodo),
+        }
+        min_w = int(_min_w_pct) / 100
+        max_w = int(_max_w_pct) / 100
+        st.session_state["opt_period"] = str(_periodo)
+
+        with st.spinner("Selezione strumenti..."):
+            _az_sel = _pick_assets("Azioni",        int(_n_az_str), _use_fondi, _use_fondi) if int(_pct_az)>0 else []
+            _ob_sel = _pick_assets("Obbligazioni",  int(_n_ob_str), _use_fondi, _use_fondi) if int(_pct_ob)>0 else []
+            _bi_sel = _pick_assets("Bilanciato",    int(_n_bi_str), _use_fondi, _use_fondi) if (int(_pct_bi)>0 and int(_n_bi_str)>0) else []
+            _mp_sel = _pick_assets("Materie Prime", int(_n_mp_str), False, False)            if (int(_pct_mp)>0 and int(_n_mp_str)>0) else []
+            if _use_azioni:
+                _it = [i for i in ITALIAN_STOCKS if not i.startswith("IT_BTP")][:4]
+                _az_sel = list(dict.fromkeys(_az_sel + _it))
+            _all_sel = list(dict.fromkeys(_az_sel + _ob_sel + _bi_sel + _mp_sel))
+            _all_sel, _az_forced = _inject_azimut(_all_sel, int(_n_min_az))
+
+        st.session_state["fe_selected_isins"] = _all_sel
+        st.session_state["fe_ac_map"] = (
+            {i: "Azioni"        for i in _az_sel} |
+            {i: "Obbligazioni"  for i in _ob_sel} |
+            {i: "Bilanciato"    for i in _bi_sel} |
+            {i: "Materie Prime" for i in _mp_sel}
+        )
+        st.session_state["fe_ac_target"] = {
+            k: v/100 for k, v in [
+                ("Azioni", int(_pct_az)), ("Obbligazioni", int(_pct_ob)),
+                ("Bilanciato", int(_pct_bi)), ("Materie Prime", int(_pct_mp)),
+            ] if v > 0
+        }
+        sel_isins          = _all_sel
+        forced_include_sel = _az_forced
+        run                = True
+
+        if sel_isins:
+            _etf_set = {e["isin"] for e in _ETF_STATIC_LIST}
+            _prev_rows = []
+            for _isin in sel_isins:
+                _info = _all_fund_pool.get(_isin, {})
+                _fonte = ("Azimut" if _info.get("_source")=="azimut"
+                          else "ETF" if _isin in _etf_set else "Terzi")
+                _macro_lbl = ("Azioni" if _isin in _az_sel else
+                              "Obbligazioni" if _isin in _ob_sel else
+                              "Bilanciato" if _isin in _bi_sel else "Mat. Prime")
+                _prev_rows.append({
+                    "Asset Class": _macro_lbl, "Fonte": _fonte, "ISIN": _isin,
+                    "Nome": str(_info.get("nome", _isin))[:52],
+                    "Score": round(float(_info.get("score_qualita", 0) or 0), 2),
+                    "Perf 3Y %": _info.get("perf_3y"),
+                    "FIDA": _info.get("rating_fida"),
+                })
+            st.dataframe(
+                pd.DataFrame(_prev_rows), use_container_width=True, hide_index=True,
+                column_config={
+                    "Score":     st.column_config.ProgressColumn("Score", min_value=0, max_value=20, format="%.2f"),
+                    "Perf 3Y %": st.column_config.NumberColumn(format="%.1f"),
+                    "FIDA":      st.column_config.NumberColumn(format="%d"),
+                    "Fonte":     st.column_config.TextColumn("Fonte", width="small"),
+                },
+                height=min(480, len(_prev_rows)*38+50),
+            )
+            _n_az_sel = sum(1 for r in _prev_rows if r["Fonte"]=="Azimut")
+            if _n_az_sel:
+                st.caption(f"{_n_az_sel} fondi Azimut inclusi")
+
+    # ── (fine sezione input) ─────────────────────────────────────────────────
 
     if run:
         if len(sel_isins) < 3:
