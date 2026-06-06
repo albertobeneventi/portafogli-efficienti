@@ -1449,18 +1449,38 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
             with st.spinner(f"Recupero dati storici per {len(sel_isins)} strumenti..."):
                 period_map = {"1Y": "1y", "3Y": "3y", "5Y": "5y"}
                 period = period_map.get(st.session_state["opt_period"], "3y")
+                # Indice rapido df_unified per lookup perf values
+                _du_idx = {}
+                if not df_unified.empty and "isin" in df_unified.columns:
+                    for _, _du_r in df_unified.iterrows():
+                        _du_isin = str(_du_r.get("isin",""))
+                        if _du_isin:
+                            _du_idx[_du_isin] = _du_r.to_dict()
+
+                def _get_perf(isin: str, key: str):
+                    """Cerca perf prima nel pool, poi in df_unified (valori scalati)."""
+                    v = _all_fund_pool.get(isin, {}).get(key)
+                    if v is None or (isinstance(v, float) and np.isnan(v)):
+                        v = _du_idx.get(isin, {}).get(key)
+                    if v is None or (isinstance(v, float) and np.isnan(v)):
+                        return None
+                    try:
+                        return float(v)
+                    except Exception:
+                        return None
+
                 asset_list = []
                 for isin in sel_isins:
                     info = _all_fund_pool.get(isin, {})
                     asset_list.append({
                         "isin": isin,
-                        "ticker": info.get("ticker"),
-                        "perf_1y": info.get("perf_1y"),
-                        "perf_3y": info.get("perf_3y"),
-                        "perf_ytd": info.get("perf_ytd"),
-                        "perf_2022": info.get("perf_2022"),
-                        "perf_2023": info.get("perf_2023"),
-                        "perf_2024": info.get("perf_2024"),
+                        "ticker": info.get("ticker") or _du_idx.get(isin, {}).get("ticker"),
+                        "perf_1y":   _get_perf(isin, "perf_1y"),
+                        "perf_3y":   _get_perf(isin, "perf_3y"),
+                        "perf_ytd":  _get_perf(isin, "perf_ytd"),
+                        "perf_2022": _get_perf(isin, "perf_2022"),
+                        "perf_2023": _get_perf(isin, "perf_2023"),
+                        "perf_2024": _get_perf(isin, "perf_2024"),
                     })
                 price_dict = get_multiple_nav(asset_list, period=period)
 
