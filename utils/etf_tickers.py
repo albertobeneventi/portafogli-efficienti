@@ -1,7 +1,23 @@
 """
-etf_tickers.py — Mappa ISIN → ticker Yahoo Finance per gli ETF della Lista C.
+etf_tickers.py — Mappa ISIN → ticker Yahoo Finance.
+Copre: ETF Lista C (85 strumenti) + FTSE MIB azioni italiane (35 titoli).
 Ticker verificati su finance.yahoo.com (suffisso .MI = Borsa Milano, .L = Londra, .DE = Xetra).
 """
+
+
+def lookup_asset(isin: str) -> dict | None:
+    """
+    Dato un ISIN ritorna dict con ticker, nome, settore se noto.
+    Cerca prima in ITALIAN_STOCKS, poi in ISIN_TO_TICKER (ETF).
+    """
+    isin = isin.strip().upper()
+    # Import lazy per evitare circolarità
+    from utils.etf_tickers import ITALIAN_STOCKS, ISIN_TO_TICKER, ETF_STATIC_MAP
+    if isin in ITALIAN_STOCKS:
+        return ITALIAN_STOCKS[isin]
+    if isin in ISIN_TO_TICKER:
+        return {"ticker": ISIN_TO_TICKER[isin], "nome": ETF_STATIC_MAP.get(isin, isin), "settore": "ETF"}
+    return None
 
 # Formato: ISIN: "TICKER" (mercato principale per volume EUR)
 ISIN_TO_TICKER: dict[str, str] = {
@@ -113,6 +129,59 @@ ISIN_TO_TICKER: dict[str, str] = {
     "JE00B78CGV99": "BRNT.MI",       # WisdomTree Brent Crude
 }
 
+# ---------------------------------------------------------------------------
+# AZIONI ITALIANE — FTSE MIB (ISIN Borsa Italiana → ticker Yahoo Finance)
+# Fonte: Borsa Italiana / Euronext Milan (verificato giugno 2025)
+# ---------------------------------------------------------------------------
+
+ITALIAN_STOCKS: dict[str, dict] = {
+    "IT0003132476": {"ticker": "ENI.MI",   "nome": "ENI",              "settore": "Energia"},
+    "IT0000072618": {"ticker": "ENEL.MI",  "nome": "Enel",             "settore": "Utilities"},
+    "IT0005239360": {"ticker": "ISP.MI",   "nome": "Intesa Sanpaolo",  "settore": "Bancario"},
+    "IT0004781412": {"ticker": "UCG.MI",   "nome": "UniCredit",        "settore": "Bancario"},
+    "IT0003856405": {"ticker": "G.MI",     "nome": "Generali",         "settore": "Assicurativo"},
+    "IT0001233417": {"ticker": "TIT.MI",   "nome": "Telecom Italia",   "settore": "Tlc"},
+    "IT0000062072": {"ticker": "MB.MI",    "nome": "Mediobanca",       "settore": "Bancario"},
+    "IT0000088176": {"ticker": "STLAM.MI", "nome": "Stellantis",       "settore": "Auto"},
+    "NL0010877643": {"ticker": "STLAM.MI", "nome": "Stellantis (NL)",  "settore": "Auto"},
+    "IT0003261697": {"ticker": "STM.MI",   "nome": "STMicroelectronics","settore": "Tecnologia"},
+    "IT0001472761": {"ticker": "LDO.MI",   "nome": "Leonardo",         "settore": "Difesa"},
+    "IT0004176001": {"ticker": "TEN.MI",   "nome": "Tenaris",          "settore": "Energia"},
+    "IT0003153415": {"ticker": "CPR.MI",   "nome": "Campari",          "settore": "Beni Consumo"},
+    "IT0001136816": {"ticker": "PRY.MI",   "nome": "Prysmian",         "settore": "Industriale"},
+    "IT0004644743": {"ticker": "RACE.MI",  "nome": "Ferrari",          "settore": "Auto"},
+    "IT0003796171": {"ticker": "MONC.MI",  "nome": "Moncler",          "settore": "Lusso"},
+    "IT0003242622": {"ticker": "BMED.MI",  "nome": "Banco BPM",        "settore": "Bancario"},
+    "IT0004712375": {"ticker": "BPSO.MI",  "nome": "BPER Banca",       "settore": "Bancario"},
+    "IT0001465159": {"ticker": "AMP.MI",   "nome": "Amplifon",         "settore": "Healthcare"},
+    "IT0004965148": {"ticker": "NEXI.MI",  "nome": "Nexi",             "settore": "Tecnologia"},
+    "IT0003242622": {"ticker": "BMPS.MI",  "nome": "Monte dei Paschi", "settore": "Bancario"},
+    "IT0005252140": {"ticker": "FBK.MI",   "nome": "FinecoBank",       "settore": "Bancario"},
+    "IT0004612429": {"ticker": "INW.MI",   "nome": "Inwit",            "settore": "Infrastrutture"},
+    "IT0003127594": {"ticker": "SRG.MI",   "nome": "Snam",             "settore": "Utilities"},
+    "IT0003153410": {"ticker": "TRN.MI",   "nome": "Terna",            "settore": "Utilities"},
+    "IT0004745584": {"ticker": "A2A.MI",   "nome": "A2A",              "settore": "Utilities"},
+    "IT0001126240": {"ticker": "HER.MI",   "nome": "Hera",             "settore": "Utilities"},
+    "IT0003049901": {"ticker": "AZM.MI",   "nome": "Azimut Holding",   "settore": "Bancario"},
+    "IT0004810054": {"ticker": "CNHI.MI",  "nome": "CNH Industrial",   "settore": "Industriale"},
+    "IT0004056880": {"ticker": "SPM.MI",   "nome": "Saipem",           "settore": "Energia"},
+    "IT0001269745": {"ticker": "IP.MI",    "nome": "Interpump",        "settore": "Industriale"},
+    "IT0004023540": {"ticker": "PIRC.MI",  "nome": "Pirelli",          "settore": "Auto"},
+    "IT0003850140": {"ticker": "REC.MI",   "nome": "Recordati",        "settore": "Farmaceutico"},
+    "IT0004239299": {"ticker": "EL.MI",    "nome": "El.En",            "settore": "Tecnologia"},
+    "IT0001063210": {"ticker": "UNI.MI",   "nome": "Unipol",           "settore": "Assicurativo"},
+    # BTP / Titoli di Stato (proxy ETF su Borsa Milano)
+    "IT_BTP_SHORT":  {"ticker": "BTP5.MI",  "nome": "BTP 1-3Y (proxy ETF)", "settore": "BTP"},
+    "IT_BTP_MED":    {"ticker": "IBTS.MI",  "nome": "BTP All-Mat (proxy ETF)","settore": "BTP"},
+    "IT_BTP_INFL":   {"ticker": "IBCI.MI",  "nome": "BTP Inflation (proxy ETF)","settore": "BTP"},
+}
+
+# Merge nella mappa principale ISIN_TO_TICKER
+for _isin, _data in ITALIAN_STOCKS.items():
+    if _isin not in ISIN_TO_TICKER:
+        ISIN_TO_TICKER[_isin] = _data["ticker"]
+
+
 # TER verificati da fonti pubbliche (KID/KIID ufficiali emittente)
 # Aggiornamento: giugno 2025
 TER_VERIFIED: dict[str, float] = {
@@ -150,3 +219,19 @@ TER_VERIFIED: dict[str, float] = {
     "GB00B15KYG56": 0.49,  "GB00B15KYH63": 0.49,  "IE00B53H0131": 0.34,
     "IE00BFXR6159": 0.30,  "GB00B15KXV33": 0.49,  "JE00B78CGV99": 0.49,
 }
+
+# Mappa ISIN→nome per ETF (usata da lookup_asset)
+ETF_STATIC_MAP: dict[str, str] = {
+    k: v for k, v in {
+        t: n for n, t in {
+            "iShares Core MSCI World": "SWDA.MI",
+            "Vanguard FTSE All-World Acc": "VWCE.MI",
+        }.items()
+    }.items()
+}
+# Costruita dinamicamente all'import da etf_static
+try:
+    from utils.etf_static import ETF_STATIC as _ES
+    ETF_STATIC_MAP = {e["isin"]: e["nome"] for e in _ES}
+except Exception:
+    ETF_STATIC_MAP = {}

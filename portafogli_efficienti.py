@@ -462,22 +462,48 @@ elif nav == "📈 Frontiera Efficiente":
                                   placeholder="ENI.MI\nAAPL\nNVDA\nISP.MI")
         if st.button("➕ Aggiungi ISIN/Ticker", key="add_custom"):
             from utils.nav_fetcher import classify_asset_type
-            added = []
+            from utils.etf_tickers import ITALIAN_STOCKS, ISIN_TO_TICKER
+            from utils.etf_static import ETF_STATIC
+            _etf_nome_map = {e["isin"]: e["nome"] for e in ETF_STATIC}
+
+            added_info = []
             for line in custom_raw.strip().split("\n"):
                 token = line.strip().upper()
                 if not token:
                     continue
                 if token not in st.session_state["fe_selected_isins"]:
                     st.session_state["fe_selected_isins"].append(token)
-                    if token not in _all_fund_pool:
+                if token not in _all_fund_pool:
+                    # Cerca info: prima azioni italiane, poi ETF map
+                    if token in ITALIAN_STOCKS:
+                        info = ITALIAN_STOCKS[token]
+                        _all_fund_pool[token] = {
+                            "isin": token,
+                            "nome": info["nome"],
+                            "classificazione": f"Azione — {info['settore']}",
+                            "ticker": info["ticker"],
+                        }
+                    elif token in _etf_nome_map:
+                        _all_fund_pool[token] = {
+                            "isin": token,
+                            "nome": _etf_nome_map[token],
+                            "classificazione": "ETF (ticker noto)",
+                            "ticker": ISIN_TO_TICKER.get(token, ""),
+                        }
+                    else:
                         asset_type = classify_asset_type(token)
                         _all_fund_pool[token] = {
                             "isin": token, "nome": token,
                             "classificazione": asset_type,
                         }
-                    added.append(token)
-            if added:
-                st.success(f"Aggiunti: {', '.join(added)}")
+                added_info.append(
+                    f"**{token}** → {_all_fund_pool[token].get('nome', token)} "
+                    f"({_all_fund_pool[token].get('classificazione','')})"
+                )
+            if added_info:
+                st.success("Aggiunti:")
+                for msg in added_info:
+                    st.markdown(f"- {msg}")
             st.rerun()
 
     # ── SELEZIONE CORRENTE ─────────────────────────────────────────────────
