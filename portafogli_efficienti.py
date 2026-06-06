@@ -235,7 +235,8 @@ def _load_preselection(df_unified_json: str):
     import io
     df_unified = pd.read_json(io.StringIO(df_unified_json), orient="records")
     lista_a = build_lista_a(df_unified)
-    lista_b = build_lista_b(df_unified)
+    _la_isins = lista_a["isin"].dropna().tolist() if not lista_a.empty else []
+    lista_b = build_lista_b(df_unified, exclude_isins=_la_isins)
     return lista_a, lista_b
 
 
@@ -558,8 +559,10 @@ if nav == "🏠 Home":
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Fondi Terzi", len(df_terzi))
     col2.metric("Fondi Azimut", len(df_azimut))
-    col3.metric("Fondi Generalisti", len(lista_a))
-    col4.metric("Fondi Tematici", len(lista_b))
+    col3.metric("Lista Generalisti", len(lista_a),
+                help="Top 100 fondi generalisti selezionati per Score Qualità (su tutti i fondi terzi)")
+    col4.metric("Lista Tematici", len(lista_b),
+                help="Top 100 fondi tematici/specializzati selezionati per Score Qualità")
 
     st.markdown("---")
     st.subheader("Liste Preselezionate")

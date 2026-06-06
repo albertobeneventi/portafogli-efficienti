@@ -92,43 +92,68 @@ def _is_missing(x) -> bool:
         return False
 
 
-def build_lista_generalisti(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
+_MONETARY_KEYWORDS = [
+    "money market", "monetari", "monetario", "liquidità",
+    "overnight", "cash fund", "ultra short", "ultrashort", "lvnav", "vnav",
+]
+
+def _cap_monetari(df: pd.DataFrame, max_n: int = 10) -> pd.DataFrame:
     """
-    Fondi Generalisti — Top N per Score Qualità con vincoli di diversificazione.
-    Comprende: globali, bilanciati, flessibili, ritorno assoluto, multi-asset.
-    Criteri più ampi rispetto alla versione precedente per garantire
-    copertura su tutte le macro-aree e asset class.
+    Limita i fondi monetari a max_n (i migliori per score).
+    Evita che saturino la lista con rendimenti artificialmente alti.
+    """
+    def _is_mon(cl):
+        cl = str(cl).lower()
+        return any(k in cl for k in _MONETARY_KEYWORDS)
+
+    is_mon = df["classificazione"].apply(_is_mon)
+    mon_df  = df[is_mon].copy()
+    rest_df = df[~is_mon].copy()
+
+    if len(mon_df) > max_n:
+        # Tieni solo i top max_n per score
+        mon_df = mon_df.sort_values("score_qualita", ascending=False).head(max_n)
+
+    return pd.concat([rest_df, mon_df], ignore_index=True)
+
+
+def build_lista_generalisti(df_unified: pd.DataFrame, n: int = 100) -> pd.DataFrame:
+    """
+    Fondi Generalisti — Top 100 per Score Qualità.
+    Comprende: globali, bilanciati, flessibili, ritorno assoluto, multi-asset,
+    obbligazionari diversificati, azionari globali/europei/emergenti.
+
+    Vincoli:
+      - max 5 fondi per casa (diversificazione emittente)
+      - max 15 per classificazione (permette copertura ampia per categoria)
+      - max monetari: 10 (cap esplicito per evitare distorsioni di score)
+      - nessun duplicato di strategia (share class diverse dello stesso fondo)
     """
     df = df_unified.copy()
     df = compute_scores_df(df)
 
-    # Perf usabile: 3Y se disponibile, altrimenti 1Y
     perf_ref = df["perf_3y"].fillna(df["perf_1y"])
-
-    # Eleggibilità — criteri allargati
     mask = (
         df["classificazione"].apply(is_generalista) &
         perf_ref.notna()
-        # Rimossa la soglia perf >= 0: includiamo anche fondi con
-        # rendimento 3Y leggermente negativo (mercati difficili 2022)
     )
-    # Rating FIDA: accetta tutti (inclusi senza rating)
     df = df[mask].copy()
 
-    # Vincoli più bilanciati: max 4 per casa, max 3 per classificazione,
-    # max 5 per macro-area (per avere più obbligazionario e bilanciato)
+    # Cap monetari prima della selezione
+    df = _cap_monetari(df, max_n=10)
+
     result = select_top_n_with_constraints(
         df, n=n,
-        max_per_casa=4,
-        max_per_classificazione=3,
-        max_per_macro_area=5,
+        max_per_casa=5,
+        max_per_classificazione=15,
+        max_per_macro_area=30,   # praticamente illimitato: macro_area spesso non valorizzata
     )
     result["_lista"] = "generalisti"
     return result
 
 
 # Alias per compatibilità
-def build_lista_a(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
+def build_lista_a(df_unified: pd.DataFrame, n: int = 100) -> pd.DataFrame:
     return build_lista_generalisti(df_unified, n)
 
 
@@ -136,35 +161,56 @@ def build_lista_a(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
 # COSTRUZIONE LISTA TEMATICI — fondi specializzati
 # ---------------------------------------------------------------------------
 
-def build_lista_tematici(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
+def build_lista_tematici(
+    df_unified: pd.DataFrame,
+    n: int = 100,
+    exclude_isins: list | None = None,
+) -> pd.DataFrame:
     """
-    Fondi Tematici — Top N per Score Qualità con vincoli.
-    Comprende: emergenti specifici, settoriali, tematici, high yield,
-    convertibili, inflation-linked, ecc.
+    Fondi Tematici — Top 100 per Score Qualità.
+    Comprende: settoriali, tematici ESG, paesi specifici, high yield,
+    convertibili, inflation-linked, materie prime, ecc.
+
+    Vincoli:
+      - max 5 fondi per casa
+      - max 10 per classificazione
+      - max monetari: 5 (ne bastano pochissimi nella lista tematici)
+      - nessun duplicato di strategia
+      - exclude_isins: ISIN già presenti nella lista generalisti (evita overlap)
     """
     df = df_unified.copy()
     df = compute_scores_df(df)
 
-    # Eleggibilità: NON generalisti + perf_1y disponibile
     mask = (
         ~df["classificazione"].apply(is_generalista) &
         df["perf_1y"].notna()
     )
     df = df[mask].copy()
 
+    # Rimuovi ISIN già in lista generalisti
+    if exclude_isins:
+        df = df[~df["isin"].isin(exclude_isins)]
+
+    # Cap monetari (lista tematici: massimo 5)
+    df = _cap_monetari(df, max_n=5)
+
     result = select_top_n_with_constraints(
         df, n=n,
-        max_per_casa=3,
-        max_per_classificazione=2,
-        max_per_macro_area=8,
+        max_per_casa=5,
+        max_per_classificazione=10,
+        max_per_macro_area=30,
     )
     result["_lista"] = "tematici"
     return result
 
 
 # Alias per compatibilità
-def build_lista_b(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
-    return build_lista_tematici(df_unified, n)
+def build_lista_b(
+    df_unified: pd.DataFrame,
+    n: int = 100,
+    exclude_isins: list | None = None,
+) -> pd.DataFrame:
+    return build_lista_tematici(df_unified, n, exclude_isins=exclude_isins)
 
 
 # ---------------------------------------------------------------------------
