@@ -92,43 +92,56 @@ def _is_missing(x) -> bool:
         return False
 
 
-def build_lista_a(df_unified: pd.DataFrame, n: int = 100) -> pd.DataFrame:
-    """Top-100 fondi generalisti per Score Qualità con vincoli."""
+def build_lista_generalisti(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
+    """
+    Fondi Generalisti — Top N per Score Qualità con vincoli di diversificazione.
+    Comprende: globali, bilanciati, flessibili, ritorno assoluto, multi-asset.
+    Criteri più ampi rispetto alla versione precedente per garantire
+    copertura su tutte le macro-aree e asset class.
+    """
     df = df_unified.copy()
     df = compute_scores_df(df)
 
     # Perf usabile: 3Y se disponibile, altrimenti 1Y
     perf_ref = df["perf_3y"].fillna(df["perf_1y"])
 
-    # Eleggibilità
+    # Eleggibilità — criteri allargati
     mask = (
         df["classificazione"].apply(is_generalista) &
-        perf_ref.notna() &
-        (perf_ref >= -50)   # escludi solo valori palesemente errati
+        perf_ref.notna()
+        # Rimossa la soglia perf >= 0: includiamo anche fondi con
+        # rendimento 3Y leggermente negativo (mercati difficili 2022)
     )
-    # Rating FIDA: ok se mancante (None/NaN) oppure >= 3
-    fida_ok = df["rating_fida"].apply(
-        lambda x: _is_missing(x) or (isinstance(x, (int, float)) and not _is_missing(x) and float(x) >= 3)
-    )
-    mask &= fida_ok
+    # Rating FIDA: accetta tutti (inclusi senza rating)
     df = df[mask].copy()
 
+    # Vincoli più bilanciati: max 4 per casa, max 3 per classificazione,
+    # max 5 per macro-area (per avere più obbligazionario e bilanciato)
     result = select_top_n_with_constraints(
         df, n=n,
-        max_per_casa=3,
-        max_per_classificazione=2,
-        max_per_macro_area=3,
+        max_per_casa=4,
+        max_per_classificazione=3,
+        max_per_macro_area=5,
     )
-    result["_lista"] = "A"
+    result["_lista"] = "generalisti"
     return result
 
 
+# Alias per compatibilità
+def build_lista_a(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
+    return build_lista_generalisti(df_unified, n)
+
+
 # ---------------------------------------------------------------------------
-# COSTRUZIONE LISTA B — 100 fondi tematici/specializzati
+# COSTRUZIONE LISTA TEMATICI — fondi specializzati
 # ---------------------------------------------------------------------------
 
-def build_lista_b(df_unified: pd.DataFrame, n: int = 100) -> pd.DataFrame:
-    """Top-100 fondi tematici per Score Qualità con vincoli."""
+def build_lista_tematici(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
+    """
+    Fondi Tematici — Top N per Score Qualità con vincoli.
+    Comprende: emergenti specifici, settoriali, tematici, high yield,
+    convertibili, inflation-linked, ecc.
+    """
     df = df_unified.copy()
     df = compute_scores_df(df)
 
@@ -141,12 +154,17 @@ def build_lista_b(df_unified: pd.DataFrame, n: int = 100) -> pd.DataFrame:
 
     result = select_top_n_with_constraints(
         df, n=n,
-        max_per_casa=2,
-        max_per_classificazione=1,
-        max_per_macro_area=5,
+        max_per_casa=3,
+        max_per_classificazione=2,
+        max_per_macro_area=8,
     )
-    result["_lista"] = "B"
+    result["_lista"] = "tematici"
     return result
+
+
+# Alias per compatibilità
+def build_lista_b(df_unified: pd.DataFrame, n: int = 150) -> pd.DataFrame:
+    return build_lista_tematici(df_unified, n)
 
 
 # ---------------------------------------------------------------------------

@@ -545,8 +545,8 @@ if nav == "🏠 Home":
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Fondi Terzi", len(df_terzi))
     col2.metric("Fondi Azimut", len(df_azimut))
-    col3.metric("Lista A (Generalisti)", len(lista_a))
-    col4.metric("Lista B (Tematici)", len(lista_b))
+    col3.metric("Fondi Generalisti", len(lista_a))
+    col4.metric("Fondi Tematici", len(lista_b))
 
     # DEBUG — visibile solo se liste vuote
     if len(lista_a) == 0 or len(lista_b) == 0:
@@ -575,7 +575,7 @@ if nav == "🏠 Home":
 
     st.markdown("---")
     st.subheader("Liste Preselezionate")
-    tab_a, tab_b = st.tabs(["📋 Lista A — Generalisti", "🎯 Lista B — Tematici"])
+    tab_a, tab_b = st.tabs(["📋 Fondi Generalisti", "🎯 Fondi Tematici"])
 
     def _render_fund_table(df: pd.DataFrame, key: str):
         if df.empty:
@@ -690,7 +690,7 @@ elif nav == "📈 Frontiera Efficiente":
     st.subheader("1️⃣ Seleziona strumenti")
 
     fe_tab_a, fe_tab_b, fe_tab_c, fe_tab_it, fe_tab_div, fe_tab_isin = st.tabs([
-        "📋 Lista A", "🎯 Lista B", "🌐 ETF",
+        "📋 Generalisti", "🎯 Tematici", "🌐 ETF",
         "🇮🇹 Titoli Italiani", "💰 Dividend", "✏️ ISIN/Ticker libero"
     ])
 
@@ -818,13 +818,13 @@ elif nav == "📈 Frontiera Efficiente":
 
     with fe_tab_a:
         if lista_a.empty:
-            st.warning("Carica i file Excel dalla sidebar per vedere i fondi generalisti.")
+            st.warning("Carica i file Excel per vedere i Fondi Generalisti.")
         else:
             _selection_tab(lista_a, "A", FUND_COLS, col_cfg=_FUND_CFG)
 
     with fe_tab_b:
         if lista_b.empty:
-            st.warning("Carica i file Excel dalla sidebar per vedere i fondi tematici.")
+            st.warning("Carica i file Excel per vedere i Fondi Tematici.")
         else:
             _selection_tab(lista_b, "B", FUND_COLS, col_cfg=_FUND_CFG)
 
@@ -921,28 +921,45 @@ elif nav == "📈 Frontiera Efficiente":
             disabled=not use_funds,
         )
 
-        # Fondi Azimut disponibili
+        # Fondi Azimut disponibili — cerca nel CATALOGO COMPLETO df_azimut
+        # (non solo nelle liste preselezionate, che potrebbero essere vuote)
         _ac_az_pool = []
+        _ac_az_scored = pd.DataFrame()
+        from utils.scoring import compute_scores_df as _css
+        from utils.data_loader import build_unified_fund_df, AZIMUT_COLS
+
+        # Prima prova df_unified (se i file sono caricati)
         if not df_unified.empty and "_source" in df_unified.columns:
-            from utils.scoring import compute_scores_df as _css
-            _az_df2 = df_unified[df_unified["_source"] == "azimut"].copy()
-            if not _az_df2.empty:
-                _az_df2 = _css(_az_df2)
-                _az_df2 = _az_df2.sort_values("score_qualita", ascending=False)
-                _ac_az_pool = _az_df2["isin"].dropna().tolist()
+            _az_src = df_unified[df_unified["_source"] == "azimut"].copy()
+            if not _az_src.empty:
+                _az_src = _css(_az_src)
+                _az_src = _az_src.sort_values("score_qualita", ascending=False)
+                _ac_az_scored = _az_src
+                _ac_az_pool = _az_src["isin"].dropna().tolist()
+
+        # Fallback: costruisce direttamente da df_azimut (catalogo completo)
+        if not _ac_az_pool and not df_azimut.empty:
+            _az_unified = build_unified_fund_df(pd.DataFrame(), df_azimut)
+            if not _az_unified.empty:
+                _az_unified = _css(_az_unified)
+                _az_unified = _az_unified.sort_values("score_qualita", ascending=False)
+                _ac_az_scored = _az_unified
+                _ac_az_pool = _az_unified["isin"].dropna().tolist()
+
         _n_az_avail = len(_ac_az_pool)
 
         n_min_az_ac = _opt_c3.number_input(
-            f"Di cui min fondi Azimut ({_n_az_avail} disponibili)",
+            f"Di cui min fondi Azimut ({_n_az_avail} nel catalogo)",
             min_value=0,
             max_value=max(_n_az_avail, 1),
             value=0, step=1,
             key="ac_n_min_az",
             help=(
-                "Garantisce almeno N fondi Azimut nel portafoglio auto-composto. "
-                "Vengono selezionati i migliori per Score Qualità."
+                "Garantisce almeno N fondi Azimut nel portafoglio. "
+                "Ricerca nel catalogo completo Azimut, ordinato per Score Qualità. "
+                "Funziona anche se i fondi Azimut non sono nelle liste preselezionate."
             ),
-            disabled=_n_az_avail == 0 or not use_funds,
+            disabled=_n_az_avail == 0,
         )
 
         # ── Sliders allocazione ───────────────────────────────────────────
@@ -2500,24 +2517,64 @@ elif nav == "🌐 ETF Universe":
 | **Ticker** | Mappa ISIN→ticker hardcoded | 85/85 ETF coperti |
 """)
 
-        cols_etf = [c for c in ["isin", "ticker", "nome", "categoria", "ter",
-                                 "perf_1y", "perf_3y", "perf_5y",
-                                 "_fonte_perf", "_fonte_ter"]
+        # Calcola perf e volatilità on-demand via yfinance per ETF visibili
+        # (solo se i dati mancano nel file cache)
+        _etf_need_perf = df_display[
+            df_display["perf_1y"].isna() & df_display["ticker"].notna()
+        ]["ticker"].dropna().tolist() if "perf_1y" in df_display.columns else []
+
+        if _etf_need_perf:
+            with st.spinner(f"Calcolo rendimenti per {len(_etf_need_perf)} ETF…"):
+                try:
+                    import yfinance as _yf
+                    _hist = _yf.download(
+                        " ".join(_etf_need_perf[:30]),  # max 30 alla volta
+                        period="3y", interval="1mo",
+                        auto_adjust=True, progress=False, threads=False
+                    )
+                    if not _hist.empty:
+                        _close = _hist["Close"] if hasattr(_hist.columns, "levels") else _hist
+                        for _tk in _etf_need_perf[:30]:
+                            if _tk not in _close.columns:
+                                continue
+                            _s = _close[_tk].dropna()
+                            if len(_s) < 12:
+                                continue
+                            _p1 = (_s.iloc[-1]/_s.iloc[-13]-1)*100 if len(_s)>=13 else None
+                            _p3 = (_s.iloc[-1]/_s.iloc[-37]-1)*100/3 if len(_s)>=37 else None
+                            _vol= float(_s.pct_change().dropna().std()*(12**0.5)*100)
+                            # Aggiorna df_display
+                            _idx = df_display[df_display["ticker"]==_tk].index
+                            if len(_idx):
+                                if _p1: df_display.loc[_idx, "perf_1y"] = round(_p1,2)
+                                if _p3: df_display.loc[_idx, "perf_3y"] = round(_p3,2)
+                                df_display.loc[_idx, "volatilita"] = round(_vol,2)
+                                df_display.loc[_idx, "_fonte_perf"] = "yfinance"
+                except Exception:
+                    pass
+
+        # Converti colonne numeriche (potrebbero essere stringhe dalla cache)
+        for _nc in ["ter","perf_1y","perf_3y","perf_5y","volatilita"]:
+            if _nc in df_display.columns:
+                df_display[_nc] = pd.to_numeric(df_display[_nc], errors="coerce")
+
+        cols_etf = [c for c in ["isin","ticker","nome","categoria","ter",
+                                 "perf_1y","perf_3y","volatilita"]
                     if c in df_display.columns]
         col_config_etf = {
-            "isin": st.column_config.TextColumn("ISIN", width="small"),
-            "ticker": st.column_config.TextColumn("Ticker", width="small"),
-            "nome": st.column_config.TextColumn("Nome", width="large"),
-            "categoria": st.column_config.TextColumn("Categoria"),
-            "ter": st.column_config.NumberColumn("TER %", format="%.2f"),
-            "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
-            "perf_3y": st.column_config.NumberColumn("Perf 3Y %/ann", format="%.2f"),
-            "perf_5y": st.column_config.NumberColumn("Perf 5Y %/ann", format="%.2f"),
-            "_fonte_perf": st.column_config.TextColumn("Fonte perf.", width="small"),
-            "_fonte_ter": st.column_config.TextColumn("Fonte TER", width="small"),
+            "isin":       st.column_config.TextColumn("ISIN", width="small"),
+            "ticker":     st.column_config.TextColumn("Ticker", width="small"),
+            "nome":       st.column_config.TextColumn("Nome", width="large"),
+            "categoria":  st.column_config.TextColumn("Categoria"),
+            "ter":        st.column_config.NumberColumn("TER %", format="%.2f"),
+            "perf_1y":    st.column_config.NumberColumn("Rend 1Y %", format="%.1f"),
+            "perf_3y":    st.column_config.NumberColumn("Rend 3Y %/a", format="%.1f"),
+            "volatilita": st.column_config.NumberColumn("Vol % (ann)", format="%.1f"),
         }
         st.dataframe(df_display[cols_etf], column_config=col_config_etf,
                      use_container_width=True, height=500)
+        st.caption("Rendimenti e volatilità calcolati da yfinance (prezzi mensili). "
+                   "Blank = ticker non trovato su Yahoo Finance.")
 
         # Grafico distribuzione per categoria
         if "categoria" in df_etf.columns:
@@ -2569,8 +2626,8 @@ L'app lavora su **tre categorie** di strumenti, ognuna con una fonte diversa:
 
 | Lista | Contenuto | Fonte |
 |-------|-----------|-------|
-| **Lista A — Generalisti** | Fondi terzi + Azimut con classificazione globale/bilanciata/flessibile | File Excel caricato in sidebar |
-| **Lista B — Tematici** | Fondi specializzati (emergenti, settoriali, tematici, high yield…) | File Excel caricato in sidebar |
+| **Fondi Generalisti** | Fondi terzi + Azimut con classificazione globale/bilanciata/flessibile | File Excel caricato in sidebar |
+| **Fondi Tematici** | Fondi specializzati (emergenti, settoriali, tematici, high yield…) | File Excel caricato in sidebar |
 | **Lista C — ETF** | 85 ETF/ETC/ETN selezionati + titoli italiani + dividend stocks | Dataset statico + yfinance per rendimenti |
 """)
 
@@ -2850,14 +2907,14 @@ Queste regole sono state definite esplicitamente per garantire portafogli
 
         with st.expander("📋 Regole Liste A/B (preselection)"):
             st.markdown("""
-**Lista A — Generalisti:**
+**Fondi Generalisti:**
 - Eleggibilità: classificazione FIDA generalista + perf 3Y disponibile + rating ≥ 3★ (o n/d) + perf 3Y ≥ 0%
 - **Max 3 fondi** per casa di gestione
 - **Max 2 fondi** per sottoclassificazione FIDA
 - **Max 1 fondo** per "radice strategia" (prime 3 parole significative del nome, escludendo share class come ACC/MINC)
 - Copertura obbligatoria di almeno 5 macro-aree: Azionario globale, Obbligazionario globale, Bilanciato, Ritorno assoluto, Flessibile
 
-**Lista B — Tematici:**
+**Fondi Tematici:**
 - **Max 2 fondi** per casa di gestione
 - **Max 1 fondo** per sotto-tema specifico
 """)
