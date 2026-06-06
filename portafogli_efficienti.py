@@ -460,15 +460,22 @@ with st.sidebar:
     # ── REBOOT CACHE ─────────────────────────────────────────────────────
     with st.expander("🔁 Cache & Portafogli salvati"):
         if st.button("🗑️ Svuota tutta la cache", use_container_width=True,
-                     help="Forza il ricaricamento di fondi, ETF e liste"):
+                     help="Forza il ricaricamento di fondi, ETF e liste. Cancella anche nav_cache.json"):
+            import os as _os2
+            from pathlib import Path as _P2
             _load_all_data.clear()
             _load_preselection.clear()
             _load_etf_universe_cached.clear()
-            # Rimuovi chiavi di risultato dall'optimizer
+            # Cancella cache su disco (nav + etf) — contengono serie con vecchi valori
+            for _cf2 in ["data/nav_cache.json","data/etf_cache.json","data/preselection_cache.json"]:
+                _fp2 = _P2(_cf2)
+                if _fp2.exists():
+                    try: _os2.remove(_fp2)
+                    except Exception: pass
             for _k in ["fe_result","fe_price_dict","bl_result","fe_selected_isins",
                         "fe_ac_map","fe_ac_target"]:
                 st.session_state.pop(_k, None)
-            st.toast("✅ Cache svuotata — pagina in ricarica")
+            st.toast("✅ Cache completamente svuotata (Streamlit + file su disco)")
             st.rerun()
 
         st.markdown("---")
@@ -1511,15 +1518,28 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
             )
             _rc1, _rc2, _rc3 = st.columns(3)
             if _rc1.button("1️⃣ Svuota cache", type="primary", use_container_width=True):
+                import os as _os
+                from pathlib import Path as _P
+                # Svuota cache Streamlit
                 _load_all_data.clear()
                 _load_preselection.clear()
                 _load_etf_universe_cached.clear()
-                for _k in ["fe_result","fe_price_dict","bl_result"]:
+                # IMPORTANTE: cancella anche nav_cache.json su disco
+                # (contiene serie sintetiche con valori decimali errati)
+                for _cache_file in ["data/nav_cache.json", "data/etf_cache.json"]:
+                    _cf = _P(_cache_file)
+                    if _cf.exists():
+                        try:
+                            _os.remove(_cf)
+                        except Exception:
+                            pass
+                # Pulisce risultati optimizer
+                for _k in ["fe_result","fe_price_dict","bl_result","fe_selected_isins"]:
                     st.session_state.pop(_k, None)
-                st.toast("✅ Cache svuotata — ricarica i file Excel")
+                st.toast("✅ Cache completamente svuotata (incluso nav_cache.json)")
                 st.rerun()
-            _rc2.info("2️⃣ Ricarica i file Excel dalla sidebar")
-            _rc3.info("3️⃣ Ricalcola la frontiera")
+            _rc2.info("2️⃣ I file Excel **rimangono in memoria** — non serve ricaricarli")
+            _rc3.info("3️⃣ Ri-seleziona i fondi e ricalcola")
             st.stop()  # Non mostrare il grafico degenere
 
         # ── Grafico Frontiera Efficiente — stile Markowitz classico ─────
