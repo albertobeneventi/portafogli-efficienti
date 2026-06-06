@@ -300,16 +300,18 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # CARICAMENTO DATI
 # ---------------------------------------------------------------------------
-_terzi_bytes = st.session_state.get("up_terzi") and st.session_state["up_terzi"].read() or None
-_azimut_bytes = st.session_state.get("up_azimut") and st.session_state["up_azimut"].read() or None
-
-# Leggi i bytes dagli uploader se presenti
 _terzi_bytes = None
 _azimut_bytes = None
-if "up_terzi" in st.session_state and st.session_state["up_terzi"] is not None:
-    _terzi_bytes = st.session_state["up_terzi"].getvalue()
-if "up_azimut" in st.session_state and st.session_state["up_azimut"] is not None:
-    _azimut_bytes = st.session_state["up_azimut"].getvalue()
+try:
+    if st.session_state.get("up_terzi") is not None:
+        _terzi_bytes = st.session_state["up_terzi"].getvalue()
+except Exception:
+    pass
+try:
+    if st.session_state.get("up_azimut") is not None:
+        _azimut_bytes = st.session_state["up_azimut"].getvalue()
+except Exception:
+    pass
 
 with st.spinner("Caricamento dati in corso..."):
     try:
