@@ -80,19 +80,36 @@ def select_top_n_with_constraints(
 # COSTRUZIONE LISTA A — 100 fondi generalisti/globali
 # ---------------------------------------------------------------------------
 
+def _is_missing(x) -> bool:
+    """True se il valore è None, NaN o stringa vuota."""
+    if x is None:
+        return True
+    if isinstance(x, str):
+        return x.strip() == ""
+    try:
+        return bool(pd.isna(x))
+    except (TypeError, ValueError):
+        return False
+
+
 def build_lista_a(df_unified: pd.DataFrame, n: int = 100) -> pd.DataFrame:
     """Top-100 fondi generalisti per Score Qualità con vincoli."""
     df = df_unified.copy()
     df = compute_scores_df(df)
 
+    # Perf usabile: 3Y se disponibile, altrimenti 1Y
+    perf_ref = df["perf_3y"].fillna(df["perf_1y"])
+
     # Eleggibilità
     mask = (
         df["classificazione"].apply(is_generalista) &
-        df["perf_3y"].notna() &
-        (df["perf_3y"] != 0) &
-        (df["perf_3y"] >= 0)
+        perf_ref.notna() &
+        (perf_ref >= -50)   # escludi solo valori palesemente errati
     )
-    fida_ok = df["rating_fida"].apply(lambda x: x is None or (isinstance(x, (int, float)) and x >= 3))
+    # Rating FIDA: ok se mancante (None/NaN) oppure >= 3
+    fida_ok = df["rating_fida"].apply(
+        lambda x: _is_missing(x) or (isinstance(x, (int, float)) and not _is_missing(x) and float(x) >= 3)
+    )
     mask &= fida_ok
     df = df[mask].copy()
 
