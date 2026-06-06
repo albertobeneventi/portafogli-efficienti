@@ -62,17 +62,65 @@ st.set_page_config(
 # CSS personalizzato
 st.markdown(f"""
 <style>
-    /* Sidebar */
+    /* ── Sidebar background ── */
     [data-testid="stSidebar"] {{
         background-color: {NAVY};
+        overflow-y: auto !important;
     }}
-    [data-testid="stSidebar"] * {{
+    /* Testo generico sidebar bianco — solo testo semplice, NON input */
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] .stCaption,
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 {{
         color: white !important;
     }}
-    [data-testid="stSidebar"] .stRadio label {{
+    /* Radio button labels */
+    [data-testid="stSidebar"] .stRadio label,
+    [data-testid="stSidebar"] .stRadio div {{
         color: white !important;
     }}
-    /* Scrollbar sempre visibile e fissa sui dataframe */
+    /* Slider label e valore */
+    [data-testid="stSidebar"] .stSlider label,
+    [data-testid="stSidebar"] .stSlider [data-testid="stTickBar"] {{
+        color: white !important;
+    }}
+    /* Selectbox: lascia il testo dell'input visibile (sfondo bianco → testo scuro) */
+    [data-testid="stSidebar"] .stSelectbox label {{
+        color: white !important;
+    }}
+    [data-testid="stSidebar"] .stSelectbox [data-testid="stWidgetLabel"] {{
+        color: white !important;
+    }}
+    /* Expander title in sidebar */
+    [data-testid="stSidebar"] .streamlit-expanderHeader {{
+        color: white !important;
+        background-color: rgba(255,255,255,0.08) !important;
+        border-radius: 6px;
+    }}
+    /* Warning/success in sidebar */
+    [data-testid="stSidebar"] .stAlert p {{
+        color: inherit !important;
+    }}
+    /* Scrollbar sidebar visibile */
+    [data-testid="stSidebar"]::-webkit-scrollbar {{
+        width: 6px;
+    }}
+    [data-testid="stSidebar"]::-webkit-scrollbar-track {{
+        background: rgba(255,255,255,0.1);
+        border-radius: 4px;
+    }}
+    [data-testid="stSidebar"]::-webkit-scrollbar-thumb {{
+        background: rgba(255,255,255,0.4);
+        border-radius: 4px;
+    }}
+    [data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover {{
+        background: rgba(255,255,255,0.7);
+    }}
+    /* ── Scrollbar dataframe ── */
     [data-testid="stDataFrame"] > div {{
         overflow-x: auto !important;
         overflow-y: auto !important;
@@ -92,11 +140,15 @@ st.markdown(f"""
     [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb:hover {{
         background: #2E5090;
     }}
-    /* Scrollbar globale */
+    /* ── Scrollbar globale pagina ── */
     ::-webkit-scrollbar {{ width: 7px; height: 7px; }}
-    ::-webkit-scrollbar-thumb {{ background: #b0b8c9; border-radius: 4px; }}
+    ::-webkit-scrollbar-track {{ background: #f5f5f5; }}
+    ::-webkit-scrollbar-thumb {{
+        background: #9aaac2;
+        border-radius: 4px;
+    }}
     ::-webkit-scrollbar-thumb:hover {{ background: {NAVY}; }}
-    /* Card metriche */
+    /* ── Card metriche ── */
     .metric-card {{
         background: {LIGHT_GRAY};
         border-left: 4px solid {NAVY};
@@ -104,7 +156,7 @@ st.markdown(f"""
         border-radius: 6px;
         margin: 6px 0;
     }}
-    /* Header tabelle */
+    /* ── Header tabelle sticky ── */
     .stDataFrame thead th {{
         background-color: {NAVY} !important;
         color: white !important;
@@ -534,21 +586,29 @@ elif nav == "📈 Frontiera Efficiente":
     def _selection_tab(df: pd.DataFrame, tab_key: str, display_cols: list,
                        col_cfg: dict | None = None, empty_msg: str = "Nessun dato."):
         """
-        Mostra tabella filtrabile + multiselect.
-        Usa st.session_state['fe_ms_{tab_key}'] come buffer,
-        poi il bottone Aggiungi trasferisce in fe_selected_isins.
+        Tabella filtrabile + multiselect.
+        Il multiselect si resetta dopo l'aggiunta incrementando un contatore
+        nel key (unica tecnica affidabile in Streamlit senza toccare widget state).
         """
         if df is None or df.empty:
             st.info(empty_msg)
             return
 
-        srch = st.text_input("🔍 Cerca", key=f"srch_{tab_key}", placeholder="nome, ISIN, categoria…")
+        # Contatore per resettare il multiselect senza toccare session_state del widget
+        ctr_key = f"_ms_ctr_{tab_key}"
+        if ctr_key not in st.session_state:
+            st.session_state[ctr_key] = 0
+
+        srch = st.text_input("🔍 Cerca", key=f"srch_{tab_key}",
+                              placeholder="nome, ISIN, categoria…")
         show_df = df.copy()
         if srch:
-            m = show_df.apply(lambda c: c.astype(str).str.contains(srch, case=False, na=False)).any(1)
+            m = show_df.apply(
+                lambda c: c.astype(str).str.contains(srch, case=False, na=False)
+            ).any(axis=1)
             show_df = show_df[m]
 
-        # Mostra solo colonne richieste + già selezionati evidenziati
+        # Tabella con colonna spunta "già in lista"
         show_cols = [c for c in display_cols if c in show_df.columns]
         disp = show_df[show_cols].copy().head(200)
         if "isin" in disp.columns:
@@ -559,9 +619,10 @@ elif nav == "📈 Frontiera Efficiente":
         st.dataframe(disp, use_container_width=True, hide_index=True,
                      column_config=cfg, height=280)
 
-        # Multiselect degli ISIN filtrati
-        opts = show_df["isin"].dropna().astype(str).tolist() if "isin" in show_df.columns else []
-        sel_key = f"fe_ms_{tab_key}"
+        # Multiselect con key che cambia ad ogni reset (evita StreamlitAPIException)
+        opts = (show_df["isin"].dropna().astype(str).tolist()
+                if "isin" in show_df.columns else [])
+        sel_key = f"fe_ms_{tab_key}_{st.session_state[ctr_key]}"
         chosen = st.multiselect(
             "Seleziona uno o più strumenti da aggiungere",
             options=opts,
@@ -570,17 +631,19 @@ elif nav == "📈 Frontiera Efficiente":
             placeholder="Cerca o scegli…",
         )
 
-        if st.button(f"➕ Aggiungi {len(chosen)} strument{'o' if len(chosen)==1 else 'i'}",
-                     key=f"add_{tab_key}",
-                     disabled=len(chosen) == 0,
-                     type="primary"):
+        if st.button(
+            f"➕ Aggiungi {len(chosen)} strument{'o' if len(chosen)==1 else 'i'}",
+            key=f"add_{tab_key}",
+            disabled=len(chosen) == 0,
+            type="primary",
+        ):
             added = 0
             for isin in chosen:
                 if isin not in st.session_state["fe_selected_isins"]:
                     st.session_state["fe_selected_isins"].append(isin)
                     added += 1
-            # Svuota il multiselect dopo l'aggiunta
-            st.session_state[sel_key] = []
+            # Incrementa contatore → nuovo key → multiselect si svuota
+            st.session_state[ctr_key] += 1
             if added:
                 st.toast(f"✅ Aggiunti {added} strumenti")
             st.rerun()
