@@ -707,7 +707,14 @@ elif nav == "📈 Frontiera Efficiente":
         t = (str(cl) + " " + str(nome)).lower()
         return any(k in t for k in _MONETARY_KW)
 
-    def _pick_assets(macro: str, n: int, use_f: bool, prefer_f: bool) -> list:
+    def _pick_assets(macro: str, n: int, use_f: bool, prefer_f: bool,
+                     allow_etf: bool = True) -> list:
+        """
+        Seleziona asset per bucket macro.
+        - use_f=True: tenta fondi da df_unified
+        - prefer_f=True: fondi prima degli ETF
+        - allow_etf=False: nessun ETF fallback (usa solo fondi da Excel)
+        """
         fund_candidates = []
         if use_f and not df_unified.empty:
             from utils.scoring import compute_scores_df
@@ -730,12 +737,14 @@ elif nav == "📈 Frontiera Efficiente":
                 if casa: _seen.add(casa)
                 if len(fund_candidates) >= n * 3: break
 
-        etf_candidates = _ETF_FALLBACK.get(macro, [])
+        etf_candidates = _ETF_FALLBACK.get(macro, []) if allow_etf else []
+
         if prefer_f and fund_candidates:
             selected = fund_candidates[:n]
-            for e in etf_candidates:
-                if e not in selected and len(selected) < n:
-                    selected.append(e)
+            if allow_etf:
+                for e in etf_candidates:
+                    if e not in selected and len(selected) < n:
+                        selected.append(e)
         elif fund_candidates and not prefer_f:
             half = n // 2
             selected = fund_candidates[:half]
@@ -743,7 +752,11 @@ elif nav == "📈 Frontiera Efficiente":
                 if e not in selected and len(selected) < n:
                     selected.append(e)
         else:
-            selected = etf_candidates[:n]
+            # Nessun fondo trovato
+            if allow_etf:
+                selected = etf_candidates[:n]
+            else:
+                selected = []   # no ETF e no fondi → avvisa l'utente più sotto
         return selected
 
     def _inject_azimut(selected: list, n_min: int) -> tuple:
@@ -823,6 +836,10 @@ elif nav == "📈 Frontiera Efficiente":
                                        _prev.get("n_min_az", 0), 1,
                                        help="I migliori per Score Qualita' vengono inclusi automaticamente")
         _use_fondi  = _sf2.checkbox("Preferisci fondi agli ETF", value=_prev.get("use_fondi", True))
+        _use_etf    = _sf2.checkbox("Includi ETF come alternativa",
+                                    value=_prev.get("use_etf", True),
+                                    help="Se disattivato, vengono usati solo fondi dall'Excel. "
+                                         "Utile quando le serie NAV degli ETF non sono necessarie.")
         _use_azioni = _sf3.checkbox("Includi azioni FTSE MIB",   value=_prev.get("use_azioni", False))
 
         st.markdown("---")
@@ -907,7 +924,8 @@ elif nav == "📈 Frontiera Efficiente":
             "pct_az": int(_pct_az), "pct_ob": int(_pct_ob), "pct_mp": int(_pct_mp),
             "n_az_str": int(_n_az_str), "n_ob_str": int(_n_ob_str), "n_mp_str": int(_n_mp_str),
             "n_min_az": int(_n_min_az),
-            "use_fondi": bool(_use_fondi), "use_azioni": bool(_use_azioni),
+            "use_fondi": bool(_use_fondi), "use_etf": bool(_use_etf),
+            "use_azioni": bool(_use_azioni),
             "min_w_pct": int(_min_w_pct), "max_w_pct": int(_max_w_pct),
             "periodo": str(_periodo),
         }
@@ -916,10 +934,10 @@ elif nav == "📈 Frontiera Efficiente":
         st.session_state["opt_period"] = str(_periodo)
 
         with st.spinner("Selezione strumenti..."):
-            _az_sel = _pick_assets("Azioni",        int(_n_az_str), _use_fondi, _use_fondi) if int(_pct_az)>0 else []
-            _ob_sel = _pick_assets("Obbligazioni",  int(_n_ob_str), _use_fondi, _use_fondi) if int(_pct_ob)>0 else []
+            _az_sel = _pick_assets("Azioni",        int(_n_az_str), _use_fondi, _use_fondi, _use_etf) if int(_pct_az)>0 else []
+            _ob_sel = _pick_assets("Obbligazioni",  int(_n_ob_str), _use_fondi, _use_fondi, _use_etf) if int(_pct_ob)>0 else []
             _bi_sel = []   # bilanciato non più campo separato
-            _mp_sel = _pick_assets("Materie Prime", int(_n_mp_str), False, False)            if (int(_pct_mp)>0 and int(_n_mp_str)>0) else []
+            _mp_sel = _pick_assets("Materie Prime", int(_n_mp_str), False, False, _use_etf) if (int(_pct_mp)>0 and int(_n_mp_str)>0) else []
             if _use_azioni:
                 _it = [i for i in ITALIAN_STOCKS if not i.startswith("IT_BTP")][:4]
                 _az_sel = list(dict.fromkeys(_az_sel + _it))
@@ -1062,24 +1080,33 @@ elif nav == "📈 Frontiera Efficiente":
                             "Usa 🗑️ Svuota cache se il problema persiste."
                         )
 
-            if len(price_dict) < 3:
+            # Conta asset viabili: con serie storica O con stats da Excel
+            _n_with_series = len(price_dict)
+            _n_with_stats  = sum(
+                1 for i in sel_isins
+                if i not in price_dict
+                and _all_fund_pool.get(i, {}).get("perf_3y") is not None
+            )
+            _n_viable = _n_with_series + _n_with_stats
+
+            if _n_viable < 3:
                 st.error(
-                    f"Dati storici insufficienti: {len(price_dict)}/{len(sel_isins)} serie valide.\n\n"
+                    f"Dati insufficienti: {_n_with_series} serie storiche + {_n_with_stats} "
+                    f"fondi da Excel = {_n_viable} strumenti viabili (min 3).\n\n"
                     "**Suggerimenti:**\n"
-                    "- Usa gli ETF (Lista C) — hanno dati yfinance certi\n"
-                    "- Clicca **🗑️ Svuota cache** nella sidebar\n"
-                    "- I fondi richiedono Morningstar/FondiDoc (potrebbero non essere raggiungibili)"
+                    "- Carica il file Excel fondi terze parti (deve contenere perf_3y e volatilita)\n"
+                    "- Abilita 'Includi ETF' per aggiungere strumenti con dati yfinance certi\n"
+                    "- Clicca **🗑️ Svuota cache** nella sidebar"
                 )
             else:
                 with st.spinner("Ottimizzazione portafoglio..."):
                     rfr = st.session_state["risk_free_rate"] / 100
-                    # Vincoli settoriali se attivati da auto-composizione
+                    # Vincoli settoriali — usa tutti gli asset selezionati (non solo price_dict)
                     ac_map   = st.session_state.get("fe_ac_map", {})
                     ac_target= st.session_state.get("fe_ac_target", {})
                     sector_constraints = None
                     if ac_map and ac_target:
-                        # Filtra solo asset che hanno dati
-                        sc_mapper = {k: v for k, v in ac_map.items() if k in price_dict}
+                        sc_mapper = {k: v for k, v in ac_map.items() if k in sel_isins}
                         if sc_mapper:
                             sector_constraints = {
                                 "mapper": sc_mapper,
@@ -1093,12 +1120,13 @@ elif nav == "📈 Frontiera Efficiente":
                         forced_include=forced_include_sel or None,
                         sector_constraints=sector_constraints,
                         assets_info=_all_fund_pool,
+                        selected_isins=sel_isins,
                     )
                 if "error" in result:
                     st.error(f"Errore ottimizzazione: {result['error']}")
                 else:
                     lbl = " (con vincoli asset class)" if sector_constraints else ""
-                    st.success(f"Ottimizzazione completata su {len(price_dict)} strumenti{lbl}.")
+                    st.success(f"Ottimizzazione completata su {_n_viable} strumenti{lbl}.")
                     st.session_state["fe_result"] = result
                     st.session_state["fe_price_dict"] = price_dict
 
@@ -1121,6 +1149,7 @@ elif nav == "📈 Frontiera Efficiente":
                                 assets_info=_all_fund_pool,
                                 forced_include=forced_include_sel or None,
                                 sector_constraints=sector_constraints,
+                                selected_isins=sel_isins,
                             )
                             st.session_state["bl_result"] = bl_r
                             st.session_state["bl_views_used"] = _bl_views_used
@@ -1131,9 +1160,10 @@ elif nav == "📈 Frontiera Efficiente":
         price_dict = st.session_state.get("fe_price_dict", {})
         bl_result  = st.session_state.get("bl_result")
 
-        # Mappa ISIN→nome per label leggibili
+        # Mappa ISIN→nome per label leggibili (tutti gli asset selezionati, non solo price_dict)
+        _all_result_isins = set(price_dict.keys()) | set(st.session_state.get("fe_selected_isins", []))
         isin_label = {isin: str(_all_fund_pool.get(isin, {}).get("nome", isin))[:35]
-                      for isin in price_dict}
+                      for isin in _all_result_isins}
 
         st.markdown("---")
         st.subheader("📊 Risultati Ottimizzazione")

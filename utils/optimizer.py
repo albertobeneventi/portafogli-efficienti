@@ -235,6 +235,7 @@ def compute_efficient_frontier(
     forced_exclude: Optional[list] = None,
     sector_constraints: Optional[dict] = None,
     assets_info: Optional[dict] = None,   # isin → {perf_3y, volatilita, classificazione, ...}
+    selected_isins: Optional[list] = None,  # lista primaria asset (include fondi senza NAV)
 ) -> dict:
     """
     Calcola frontiera efficiente con approccio ibrido.
@@ -248,14 +249,32 @@ def compute_efficient_frontier(
     if forced_exclude:
         price_dict = {k: v for k, v in price_dict.items() if k not in forced_exclude}
 
-    if len(price_dict) < 3:
-        return {"error": f"Asset insufficienti: {len(price_dict)} (min 3)."}
-
-    all_isins = list(price_dict.keys())
     _info = assets_info or {}
 
-    # μ e Σ ibride
-    mu, cov = build_hybrid_mu_sigma(_info, price_dict,
+    # Costruisce all_isins:
+    # - se passato selected_isins: usa quelli come lista primaria (fondi UCITS inclusi anche senza price series)
+    # - altrimenti: solo asset presenti in price_dict
+    if selected_isins:
+        all_isins = [i for i in selected_isins if not forced_exclude or i not in forced_exclude]
+    else:
+        all_isins = [i for i in price_dict if not forced_exclude or i not in forced_exclude]
+
+    # Conta asset "viabili": con serie storica O con statistiche Excel (perf_3y/perf_1y)
+    _n_series = sum(1 for i in all_isins if i in price_dict)
+    _n_stats  = sum(1 for i in all_isins
+                    if i not in price_dict
+                    and (_info.get(i, {}).get("perf_3y") is not None
+                         or _info.get(i, {}).get("perf_1y") is not None))
+    _n_viable = _n_series + _n_stats
+
+    if _n_viable < 3:
+        return {"error": f"Asset insufficienti: {_n_series} serie storiche + {_n_stats} da Excel = {_n_viable} totali (min 3)."}
+    if len(all_isins) < 3:
+        return {"error": f"Asset selezionati insufficienti: {len(all_isins)} (min 3)."}
+
+    # μ e Σ ibride — passa solo i dati dei fondi selezionati
+    _sel_info = {i: _info.get(i, {}) for i in all_isins}
+    mu, cov = build_hybrid_mu_sigma(_sel_info, price_dict,
                                     risk_free_rate=risk_free_rate)
     # Allinea all_isins a quelli in mu
     all_isins = [i for i in all_isins if i in mu.index]
@@ -379,6 +398,7 @@ def compute_black_litterman(
     assets_info: Optional[dict] = None,
     forced_include: Optional[list] = None,
     sector_constraints: Optional[dict] = None,
+    selected_isins: Optional[list] = None,  # lista primaria asset (include fondi senza NAV)
 ) -> dict:
     """
     Portafoglio Black-Litterman con views manuali o auto.
@@ -387,9 +407,10 @@ def compute_black_litterman(
         return {"error": "PyPortfolioOpt non installato."}
 
     _info = assets_info or {}
-    all_isins = list(price_dict.keys())
+    all_isins = list(selected_isins) if selected_isins else list(price_dict.keys())
 
-    mu_prior, cov = build_hybrid_mu_sigma(_info, price_dict,
+    _sel_info = {i: _info.get(i, {}) for i in all_isins}
+    mu_prior, cov = build_hybrid_mu_sigma(_sel_info, price_dict,
                                           risk_free_rate=risk_free_rate)
     all_isins = [i for i in all_isins if i in mu_prior.index]
     mu_prior  = mu_prior[all_isins]
