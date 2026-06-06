@@ -1,0 +1,13 @@
+data/nav_cache.json
+data/etf_cache.json
+data/preselection_cache.json
+data/etf_errors.log
+data/etf_universe.xlsx
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# File dati proprietari — non committare
+tabella_fondi_arricchita.xlsx
+fondi_azimut_isin_completo_RATED.xlsx
