@@ -581,6 +581,18 @@ elif nav == "📈 Frontiera Efficiente":
                           "classificazione": f"Dividendo — {_info['settore']} ({_info['paese']})",
                           "ticker": _info["ticker"]})
 
+    # Arricchisce il pool con TUTTI i fondi già in selezione ma non ancora nel pool
+    # (es. fondi Azimut auto-aggiunti che non sono in lista_a/lista_b)
+    if not df_unified.empty and st.session_state.get("fe_selected_isins"):
+        _missing = [
+            i for i in st.session_state["fe_selected_isins"]
+            if i not in _all_fund_pool
+        ]
+        if _missing:
+            _missing_set = set(_missing)
+            for _, _r in df_unified[df_unified["isin"].isin(_missing_set)].iterrows():
+                _pool_add(str(_r["isin"]), _r.to_dict())
+
     # helper: label leggibile per un ISIN
     def _label(isin: str) -> str:
         nome = _all_fund_pool.get(isin, {}).get("nome", isin)
@@ -1022,22 +1034,50 @@ elif nav == "📈 Frontiera Efficiente":
     if sel_isins:
         sel_rows = []
         for isin in sel_isins:
-            info = _all_fund_pool.get(isin, {"isin": isin, "nome": isin})
+            info = _all_fund_pool.get(isin, {})
+            # Lookup in df_unified se info vuota o nome mancante
+            if (not info or info.get("nome") == isin) and not df_unified.empty:
+                _row = df_unified[df_unified["isin"] == isin]
+                if not _row.empty:
+                    info = _row.iloc[0].to_dict()
+                    _pool_add(isin, info)
+
+            def _fmt_num(v):
+                """Restituisce float o np.nan (mai None) per colonne numeriche."""
+                if v is None or str(v) in ("None","nan","NaN",""):
+                    return np.nan
+                try: return float(v)
+                except: return np.nan
+
+            nome = str(info.get("nome", info.get("FONDO AZIMUT", isin)))
+            if nome == isin:  # ancora senza nome
+                nome = isin
             sel_rows.append({
                 "ISIN": isin,
-                "Nome": str(info.get("nome", info.get("FONDO AZIMUT", isin)))[:60],
-                "Classificazione": str(info.get("classificazione", info.get("categoria", ""))),
-                "Perf 1Y %": info.get("perf_1y"),
-                "Perf 3Y %": info.get("perf_3y"),
-                "Volatilità %": info.get("volatilita"),
+                "Nome": nome[:60],
+                "Fonte": "Azimut" if info.get("_source")=="azimut" else
+                         ("Terzi" if info.get("_source")=="terzi" else
+                          ("ETF" if info.get("_lista")=="C" else "—")),
+                "Classificazione": str(info.get("classificazione", info.get("categoria", "—"))),
+                "Perf 1Y %": _fmt_num(info.get("perf_1y")),
+                "Perf 3Y %": _fmt_num(info.get("perf_3y")),
+                "★ FIDA": info.get("rating_fida"),
+                "Volatilità %": _fmt_num(info.get("volatilita")),
             })
         sel_df = pd.DataFrame(sel_rows)
         st.dataframe(sel_df, use_container_width=True, hide_index=True,
                      column_config={
-                         "Perf 1Y %": st.column_config.NumberColumn(format="%.2f"),
-                         "Perf 3Y %": st.column_config.NumberColumn(format="%.2f"),
-                         "Volatilità %": st.column_config.NumberColumn(format="%.2f"),
-                     })
+                         "ISIN": st.column_config.TextColumn("ISIN", width="small"),
+                         "Nome": st.column_config.TextColumn("Nome / Fondo", width="large"),
+                         "Fonte": st.column_config.TextColumn("Fonte", width="small"),
+                         "Classificazione": st.column_config.TextColumn("Classificazione"),
+                         "Perf 1Y %": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
+                         "Perf 3Y %": st.column_config.NumberColumn("Perf 3Y %", format="%.2f"),
+                         "★ FIDA": st.column_config.NumberColumn("★ FIDA", format="%d"),
+                         "Volatilità %": st.column_config.NumberColumn("Vol %", format="%.2f"),
+                     },
+                     height=min(400, len(sel_rows)*38+50),
+                     )
         # Rimuovi asset
         to_remove = st.multiselect("Rimuovi dalla selezione",
                                    options=sel_isins,
