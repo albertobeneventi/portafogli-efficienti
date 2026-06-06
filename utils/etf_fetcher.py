@@ -252,13 +252,16 @@ def _fetch_justetf(isin: str, session: requests.Session) -> dict | None:
 
 
 def _fallback_record(isin: str) -> dict:
-    """Record minimo quando JustETF non risponde."""
+    """Record con dati statici hardcoded quando JustETF non risponde."""
+    from .etf_static import ETF_STATIC
+    static = {e["isin"]: e for e in ETF_STATIC}
+    base = static.get(isin, {})
     return {
         "isin": isin,
-        "nome": isin,
-        "categoria": CATEGORY_MAP.get(isin, "ETF"),
-        "ter": None,
-        "aum_mln": None,
+        "nome": base.get("nome", isin),
+        "categoria": base.get("categoria", CATEGORY_MAP.get(isin, "ETF")),
+        "ter": base.get("ter"),
+        "aum_mln": base.get("aum_mln"),
         "perf_1y": None,
         "perf_3y": None,
         "perf_5y": None,
@@ -310,13 +313,27 @@ def fetch_etf_universe(
 def load_etf_universe(extra_isins: list[str] | None = None) -> pd.DataFrame:
     """
     Carica etf_universe.xlsx se esiste e valido (< 24h),
-    altrimenti rigenera.
+    altrimenti prova fetch JustETF, fallback su dataset statico.
     """
     if ETF_UNIVERSE_FILE.exists():
         mod_time = datetime.fromtimestamp(ETF_UNIVERSE_FILE.stat().st_mtime)
         if datetime.now() - mod_time < timedelta(hours=CACHE_TTL_HOURS) and not extra_isins:
             try:
-                return pd.read_excel(ETF_UNIVERSE_FILE, dtype=str)
+                df = pd.read_excel(ETF_UNIVERSE_FILE, dtype=str)
+                if not df.empty:
+                    return df
             except Exception:
                 pass
-    return fetch_etf_universe(extra_isins=extra_isins)
+    try:
+        df = fetch_etf_universe(extra_isins=extra_isins)
+        # Se tutti i nomi sono ISIN (scraping fallito), usa dataset statico
+        isin_as_nome = (df["nome"] == df["isin"]).sum()
+        if isin_as_nome > len(df) * 0.5:
+            raise ValueError("JustETF scraping non riuscito — uso dataset statico")
+        return df
+    except Exception:
+        from .etf_static import get_static_etf_df
+        df = get_static_etf_df()
+        DATA_DIR.mkdir(exist_ok=True)
+        df.to_excel(ETF_UNIVERSE_FILE, index=False)
+        return df

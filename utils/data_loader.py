@@ -61,14 +61,70 @@ KEYWORD_GENERALISTE = [
 ]
 
 MACRO_AREA_MAP = {
-    "US": ["stati uniti", "usa", "america", "s&p", "nasdaq"],
-    "Europe": ["europa", "european", "euro", "stoxx", "dax"],
-    "Emerging": ["emergenti", "emerging", "em ", "bric", "asia ex"],
+    "US": ["stati uniti", "usa", "america", "s&p", "nasdaq", "north america"],
+    "Europe": ["europa", "european", "euro", "stoxx", "dax", "europe"],
+    "Emerging": ["emergenti", "emerging", "em ", "bric", "asia ex", "frontier"],
     "Japan": ["giappone", "japan", "japanese"],
-    "Asia": ["asia", "pacifico", "pacific", "cina", "china", "india"],
-    "Global": ["globali", "globale", "global", "world", "mondo", "acwi", "msci w"],
+    "Asia": ["asia", "pacifico", "pacific", "cina", "china", "india", "asia pac"],
+    "Global": ["globali", "globale", "global", "world", "mondo", "acwi", "msci w",
+               "international", "internazionale", "worldwide"],
     "Italy": ["italia", "italian", "btp", "ftse mib"],
 }
+
+# Regole per inferire classificazione FIDA dal nome del fondo
+_CLASS_RULES = [
+    # Ordine: più specifico prima
+    ("Azionari Emergenti",        ["emerging market", "em equity", "emerging equity", "frontier market"]),
+    ("Azionari USA",              ["s&p 500", "nasdaq", "us equity", "north america equity", "american"]),
+    ("Azionari Europa",           ["europe equity", "european equity", "euro equity", "stoxx"]),
+    ("Azionari Giappone",         ["japan equity", "japanese equity"]),
+    ("Azionari Asia Pacifico",    ["asia pac", "asia equity", "pacific equity"]),
+    ("Azionari Globali",          ["global equity", "world equity", "equity global", "global stock",
+                                   "msci world", "all world", "ftse all", "acwi", "world fund"]),
+    ("Azionari Tematici",         ["technology", "tech fund", "healthcare", "biotech", "pharma",
+                                   "infrastructure", "energy transition", "clean energy", "robotics",
+                                   "artificial intel", "semiconductor", "defense", "luxury",
+                                   "water fund", "agriculture fund", "gold", "precious metal",
+                                   "innovation", "digital", "cyber", "esg theme"]),
+    ("Azionari",                  ["equity", "azionari", "azioni", "stock", "growth fund",
+                                   "dividend", "value fund", "small cap", "large cap", "mid cap",
+                                   "fund a2", "fund a acc", "fund e acc"]),
+    ("Obbligazionari Emergenti",  ["emerging bond", "em bond", "emerging debt", "em debt"]),
+    ("Obbligazionari High Yield", ["high yield", "junk bond", "hy bond", "coco", "at1"]),
+    ("Obbligazionari Governativi",["government bond", "govt bond", "sovrani", "treasury",
+                                   "sovereign", "gilts", "bund"]),
+    ("Obbligazionari Globali",    ["global bond", "world bond", "aggregate bond", "bond global",
+                                   "fixed income global", "obbligazionari globali"]),
+    ("Obbligazionari",            ["bond", "obbligazionari", "fixed income", "reddito fisso",
+                                   "debt fund", "income fund", "credit fund", "duration"]),
+    ("Monetario",                 ["money market", "monetario", "liquidità", "cash fund",
+                                   "overnight", "short term", "ultra short"]),
+    ("Ritorno Assoluto",          ["absolute return", "ritorno assoluto", "total return",
+                                   "unconstrained", "market neutral"]),
+    ("Bilanciati",                ["balanced", "bilanciati", "multi asset", "multi-asset",
+                                   "allocation", "60/40", "conservative alloc", "moderate alloc",
+                                   "growth alloc", "income and growth", "patrimoine", "patrimony",
+                                   "diversified", "portfolio fund", "income portfolio"]),
+    ("Flessibili",                ["flexible", "flessibili", "dynamic allocation",
+                                   "strategic allocation", "tactical", "kaldemorgen",
+                                   "concept", "multi strategy", "unconstrained alloc"]),
+    ("Alternativi",               ["alternative", "hedge", "long short", "long/short",
+                                   "event driven", "merger arb", "macro fund"]),
+]
+
+
+def _infer_classificazione(nome: str, classificazione_raw: str) -> str:
+    """
+    Usa la classificazione raw se non vuota,
+    altrimenti la inferisce dal nome del fondo.
+    """
+    if classificazione_raw and classificazione_raw.strip():
+        return classificazione_raw.strip()
+    n = nome.lower() if nome else ""
+    for label, keywords in _CLASS_RULES:
+        if any(k in n for k in keywords):
+            return label
+    return "Altro"
 
 
 def _sanitize_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -220,7 +276,7 @@ def _autoscale_perf(df: pd.DataFrame, perf_cols: list[str]) -> pd.DataFrame:
         if len(vals) == 0:
             continue
         # Se il 75° percentile è < 5 e ci sono abbastanza valori → formato decimale
-        if vals.abs().quantile(0.75) < 5 and len(vals) > 10:
+        if vals.abs().quantile(0.75) < 5 and len(vals) > 3:
             df[col] = df[col].apply(lambda x: x * 100 if pd.notna(x) and isinstance(x, (int, float)) else x)
     return df
 
@@ -331,11 +387,13 @@ def build_unified_fund_df(df_terzi: pd.DataFrame, df_azimut: pd.DataFrame) -> pd
 
     for _, r in df_terzi.iterrows():
         c = TERZI_COLS
+        nome_val = str(r.get(c["nome"], "") or "")
+        class_val = str(r.get(c["classificazione"], "") or "")
         rows.append({
             "isin": r.get(c["isin"], ""),
-            "nome": r.get(c["nome"], ""),
+            "nome": nome_val,
             "casa": r.get(c["casa"], ""),
-            "classificazione": r.get(c["classificazione"], ""),
+            "classificazione": _infer_classificazione(nome_val, class_val),
             "perf_1y": r.get(c["perf_1y"], np.nan),
             "perf_3y": r.get(c["perf_3y"], np.nan),
             "perf_ytd": r.get(c["perf_ytd"], np.nan),
@@ -354,11 +412,13 @@ def build_unified_fund_df(df_terzi: pd.DataFrame, df_azimut: pd.DataFrame) -> pd
 
     for _, r in df_azimut.iterrows():
         c = AZIMUT_COLS
+        nome_val = str(r.get(c["nome"], "") or "")
+        class_val = str(r.get(c["classificazione"], "") or "")
         rows.append({
             "isin": r.get(c["isin"], ""),
-            "nome": r.get(c["nome"], ""),
+            "nome": nome_val,
             "casa": "Azimut",
-            "classificazione": r.get(c["classificazione"], ""),
+            "classificazione": _infer_classificazione(nome_val, class_val),
             "perf_1y": r.get(c["perf_1y"], np.nan),
             "perf_3y": r.get(c["perf_3y"], np.nan),
             "perf_ytd": r.get(c["perf_ytd"], np.nan),
@@ -376,9 +436,14 @@ def build_unified_fund_df(df_terzi: pd.DataFrame, df_azimut: pd.DataFrame) -> pd
         })
 
     df = pd.DataFrame(rows)
-    df["isin"] = df["isin"].fillna("").str.strip()
+    df["isin"] = df["isin"].fillna("").astype(str).str.strip()
     df = df[df["isin"] != ""].copy()
     df = df.drop_duplicates(subset=["isin"]).reset_index(drop=True)
+
+    # Autoscale perf: se valori in range 0-1 (es. 0.27) → moltiplica x100
+    perf_cols_unified = ["perf_1y", "perf_3y", "perf_ytd",
+                          "perf_2024", "perf_2023", "perf_2022"]
+    df = _autoscale_perf(df, perf_cols_unified)
     return df
 
 
