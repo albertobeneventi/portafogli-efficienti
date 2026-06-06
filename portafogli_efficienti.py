@@ -107,7 +107,8 @@ def _load_all_data(terzi_bytes: bytes | None = None, azimut_bytes: bytes | None 
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _load_preselection(df_unified_json: str):
-    df_unified = pd.read_json(df_unified_json, orient="records")
+    import io
+    df_unified = pd.read_json(io.StringIO(df_unified_json), orient="records")
     lista_a = build_lista_a(df_unified)
     lista_b = build_lista_b(df_unified)
     return lista_a, lista_b
