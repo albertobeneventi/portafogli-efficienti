@@ -550,7 +550,7 @@ if nav == "🏠 Home":
 
     # DEBUG — visibile solo se liste vuote
     if len(lista_a) == 0 or len(lista_b) == 0:
-        with st.expander("🔍 Debug dati caricati", expanded=True):
+        with st.expander("🔍 Debug dati caricati", expanded=False):
             st.markdown("**Colonne rilevate nel df_unified:**")
             st.code(list(df_unified.columns))
             if not df_unified.empty:
