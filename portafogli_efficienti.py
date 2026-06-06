@@ -1067,29 +1067,58 @@ elif nav == "📈 Frontiera Efficiente":
         format_func=lambda x: f"{x}",
         key="fe_forced_include",
     )
-    # Fondi Azimut nella selezione corrente
-    _azimut_in_sel = [
-        i for i in sel_isins
-        if _all_fund_pool.get(i, {}).get("_source") == "azimut"
-        or _all_fund_pool.get(i, {}).get("casa","").lower() == "azimut"
-    ]
+    # Fondi Azimut disponibili nel pool COMPLETO (df_unified), non solo nella selezione
+    _azimut_pool = []
+    if not df_unified.empty and "_source" in df_unified.columns:
+        from utils.scoring import compute_scores_df
+        _az_df = df_unified[df_unified["_source"] == "azimut"].copy()
+        if not _az_df.empty:
+            _az_df = compute_scores_df(_az_df)
+            _az_df = _az_df.sort_values("score_qualita", ascending=False)
+            _azimut_pool = _az_df["isin"].dropna().tolist()
+
+    n_az_pool = len(_azimut_pool)
     n_min_azimut = v_col4.number_input(
-        f"Min fondi Azimut ({len(_azimut_in_sel)} disponibili)",
+        f"Min fondi Azimut ({n_az_pool} nel database)",
         min_value=0,
-        max_value=max(len(_azimut_in_sel), 1),
+        max_value=max(n_az_pool, 1),
         value=0,
         step=1,
         key="fe_n_min_azimut",
-        help="Forza l'inclusione di almeno N fondi Azimut nel portafoglio ottimizzato",
-        disabled=len(_azimut_in_sel) == 0,
+        help=(
+            "Garantisce almeno N fondi Azimut nel portafoglio.\n"
+            "Se non sono già nella selezione, vengono aggiunti automaticamente "
+            "scegliendo i migliori per Score Qualità."
+        ),
+        disabled=n_az_pool == 0,
     )
-    # Aggiungi fondi Azimut a forced_include se n_min_azimut > 0
-    if n_min_azimut > 0 and _azimut_in_sel:
-        _az_forced = _azimut_in_sel[:int(n_min_azimut)]
-        forced_include_sel = list(dict.fromkeys(
-            (forced_include_sel or []) + _az_forced
-        ))
-        st.caption(f"🔒 Azimut forzati: {', '.join([_all_fund_pool.get(i,{}).get('nome',i)[:35] for i in _az_forced])}")
+    # Se n_min_azimut > 0: aggiunge i migliori N fondi Azimut alla selezione e a forced_include
+    if n_min_azimut > 0 and _azimut_pool:
+        _az_forced = []
+        # Prima usa quelli già nella selezione
+        _az_in_sel = [i for i in sel_isins if i in _azimut_pool]
+        _az_forced.extend(_az_in_sel[:int(n_min_azimut)])
+        # Se non bastano, aggiunge i migliori dal pool
+        for _az_isin in _azimut_pool:
+            if len(_az_forced) >= int(n_min_azimut):
+                break
+            if _az_isin not in _az_forced:
+                _az_forced.append(_az_isin)
+                # Aggiungi anche alla selezione dell'ottimizzazione
+                if _az_isin not in st.session_state["fe_selected_isins"]:
+                    st.session_state["fe_selected_isins"].append(_az_isin)
+                    # Aggiorna pool locale
+                    if _az_isin not in _all_fund_pool:
+                        _az_row = df_unified[df_unified["isin"] == _az_isin]
+                        if not _az_row.empty:
+                            _pool_add(_az_isin, _az_row.iloc[0].to_dict())
+
+        forced_include_sel = list(dict.fromkeys((forced_include_sel or []) + _az_forced))
+        _az_names = [
+            str(_all_fund_pool.get(i, {}).get("nome", i))[:35]
+            for i in _az_forced
+        ]
+        v_col4.caption(f"🔒 {', '.join(_az_names)}")
 
     # ── STEP 2b: BLACK-LITTERMAN ───────────────────────────────────────────
     with st.expander("🔮 Black-Litterman — aggiungi le tue view di mercato", expanded=False):
