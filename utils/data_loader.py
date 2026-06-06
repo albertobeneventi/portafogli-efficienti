@@ -3,6 +3,7 @@ data_loader.py — carica e normalizza i file Excel fondi terzi e Azimut.
 """
 
 import os
+import datetime
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -70,13 +71,47 @@ MACRO_AREA_MAP = {
 }
 
 
+def _sanitize_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Converte tutte le celle in stringa gestendo datetime, NaT e NaN.
+    Necessario perché pd.read_excel con dtype=str non converte celle
+    formattate come data in Excel.
+    """
+    def _cell(x):
+        if x is None:
+            return ""
+        if isinstance(x, (datetime.datetime, datetime.date)):
+            return x.strftime("%Y-%m-%d")
+        if isinstance(x, float) and np.isnan(x):
+            return ""
+        try:
+            if pd.isna(x):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(x)
+
+    for col in df.columns:
+        df[col] = df[col].apply(_cell)
+    return df
+
+
 def _to_float(val):
     """Converte stringa percentuale in float."""
-    if pd.isna(val):
+    if val is None or val == "":
         return np.nan
     if isinstance(val, (int, float)):
+        if isinstance(val, float) and np.isnan(val):
+            return np.nan
         return float(val)
+    try:
+        if pd.isna(val):
+            return np.nan
+    except (TypeError, ValueError):
+        pass
     s = str(val).replace("%", "").replace(",", ".").strip()
+    if s == "" or s.lower() in ("nan", "none", "n/a", "-"):
+        return np.nan
     try:
         return float(s)
     except ValueError:
@@ -85,9 +120,16 @@ def _to_float(val):
 
 def _parse_stars(val):
     """Converte stelle in int (1-5) o None."""
-    if pd.isna(val):
+    if val is None or val == "":
         return None
+    try:
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(val, (int, float)):
+        if isinstance(val, float) and np.isnan(val):
+            return None
         v = int(val)
         return v if 1 <= v <= 5 else None
     s = str(val).strip()
@@ -130,8 +172,9 @@ def load_fondi_terzi(path=None) -> pd.DataFrame:
     is_filelike = hasattr(path, "read") or isinstance(path, (bytes, io.BytesIO))
     if not is_filelike and not os.path.exists(path):
         return _demo_fondi_terzi()
-    df = pd.read_excel(path, sheet_name="tutti quelli trasferibili", dtype=str)
-    df.columns = [c.strip() for c in df.columns]
+    df = pd.read_excel(path, sheet_name="tutti quelli trasferibili", dtype=object)
+    df.columns = [str(c).strip() for c in df.columns]
+    df = _sanitize_df(df)
     df = _normalize_perf(df, TERZI_COLS)
     c = TERZI_COLS
     for key in ["commissioni", "retrocessione", "volatilita"]:
@@ -160,8 +203,9 @@ def load_fondi_azimut(path=None) -> pd.DataFrame:
     is_filelike = hasattr(path, "read") or isinstance(path, (bytes, io.BytesIO))
     if not is_filelike and not os.path.exists(path):
         return _demo_fondi_azimut()
-    df = pd.read_excel(path, dtype=str)
-    df.columns = [c.strip() for c in df.columns]
+    df = pd.read_excel(path, dtype=object)
+    df.columns = [str(c).strip() for c in df.columns]
+    df = _sanitize_df(df)
     df = _normalize_perf(df, AZIMUT_COLS)
     c = AZIMUT_COLS
     if c["ongoing_charges"] in df.columns:
