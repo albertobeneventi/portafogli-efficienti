@@ -445,16 +445,39 @@ elif nav == "📈 Frontiera Efficiente":
     with fe_tab_c:
         _render_selectable_table(df_etf_fe if not df_etf_fe.empty else pd.DataFrame(), "C", ETF_COLS)
     with fe_tab_isin:
-        st.markdown("Inserisci ISIN o ticker (uno per riga). Esempi: `IE00B4L5Y983`, `AAPL`, `ENI.MI`")
+        st.markdown("""
+**Inserisci ISIN o ticker — uno per riga.**
+
+| Tipo | Esempi | Fonte dati |
+|------|--------|------------|
+| ETF europei (ISIN) | `IE00B4L5Y983`, `LU0908500753` | yfinance via ticker map |
+| Azioni italiane | `ENI.MI`, `ISP.MI`, `UCG.MI` | yfinance diretto |
+| Azioni USA | `AAPL`, `MSFT`, `NVDA` | yfinance diretto |
+| Azioni europee | `ADS.DE`, `ASML.AS`, `MC.PA` | yfinance diretto |
+| ETF su Xetra | `EXW1.DE`, `EUNL.DE` | yfinance diretto |
+| Fondi (ISIN) | `LU0048578792` | Morningstar → FondiDoc → sintetica |
+| BTP proxy | `IBTS.MI`, `BTP5.MI` | yfinance diretto |
+""")
         custom_raw = st.text_area("ISIN / Ticker", height=120, key="fe_custom_raw",
-                                  placeholder="IE00B4L5Y983\nIE00BK5BQT80\nAAPL")
+                                  placeholder="ENI.MI\nAAPL\nNVDA\nISP.MI")
         if st.button("➕ Aggiungi ISIN/Ticker", key="add_custom"):
+            from utils.nav_fetcher import classify_asset_type
+            added = []
             for line in custom_raw.strip().split("\n"):
                 token = line.strip().upper()
-                if token and token not in st.session_state["fe_selected_isins"]:
+                if not token:
+                    continue
+                if token not in st.session_state["fe_selected_isins"]:
                     st.session_state["fe_selected_isins"].append(token)
                     if token not in _all_fund_pool:
-                        _all_fund_pool[token] = {"isin": token, "nome": token}
+                        asset_type = classify_asset_type(token)
+                        _all_fund_pool[token] = {
+                            "isin": token, "nome": token,
+                            "classificazione": asset_type,
+                        }
+                    added.append(token)
+            if added:
+                st.success(f"Aggiunti: {', '.join(added)}")
             st.rerun()
 
     # ── SELEZIONE CORRENTE ─────────────────────────────────────────────────

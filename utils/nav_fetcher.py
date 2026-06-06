@@ -235,6 +235,60 @@ def _synthetic_series_from_yearly(yearly: dict) -> pd.Series:
 # FUNZIONE PRINCIPALE
 # ---------------------------------------------------------------------------
 
+_ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{10}$")
+
+
+def _looks_like_isin(token: str) -> bool:
+    return bool(_ISIN_RE.match(token.upper()))
+
+
+def _looks_like_ticker(token: str) -> bool:
+    """Ticker = non-ISIN e contiene lettere (con possibile suffisso .MI .DE .L ecc.)."""
+    return not _looks_like_isin(token) and bool(re.match(r"^[A-Z0-9]{1,6}(\.[A-Z]{1,3})?$", token.upper()))
+
+
+def _resolve_ticker(isin: str, provided_ticker: str | None) -> list[str]:
+    """
+    Ritorna lista di ticker da provare su yfinance per un dato ISIN/token.
+    Priorità:
+      1. ticker fornito esplicitamente
+      2. ISIN_TO_TICKER map (ETF hardcoded)
+      3. Se il token stesso sembra un ticker → usalo direttamente
+      4. Varianti comuni (ISIN.MI, ISIN.L, ISIN.DE)
+    """
+    from .etf_tickers import ISIN_TO_TICKER
+
+    candidates = []
+    token = isin.strip().upper()
+
+    if provided_ticker:
+        candidates.append(provided_ticker)
+
+    # ETF map
+    if token in ISIN_TO_TICKER:
+        t = ISIN_TO_TICKER[token]
+        if t not in candidates:
+            candidates.append(t)
+
+    # Token sembra già un ticker (es. "AAPL", "ENI.MI")
+    if _looks_like_ticker(token):
+        if token not in candidates:
+            candidates.append(token)
+        # Prova anche versione con .MI per azioni italiane
+        if "." not in token:
+            candidates.extend([f"{token}.MI", f"{token}.L", f"{token}.DE"])
+
+    # ETF europei: ISIN funziona spesso come ticker su Yahoo con suffisso .MI
+    if _looks_like_isin(token) and token not in ISIN_TO_TICKER:
+        candidates.extend([
+            f"{token}.MI", f"{token}.L", f"{token}.DE", f"{token}.F"
+        ])
+
+    # Rimuovi duplicati mantenendo ordine
+    seen = set()
+    return [c for c in candidates if not (c in seen or seen.add(c))]
+
+
 def get_nav_series(
     isin: str,
     ticker: str | None = None,
@@ -247,33 +301,59 @@ def get_nav_series(
     period: str = "3y",
 ) -> pd.Series | None:
     """
-    Recupera serie storica prezzi/NAV per un ISIN.
-    Cascata: cache → Morningstar → FondiDoc → yfinance → sintetica.
+    Recupera serie storica prezzi/NAV per un ISIN, ticker o codice qualsiasi.
+
+    Cascata per ISIN di fondo:
+      cache → Morningstar → FondiDoc → yfinance (ticker map) → sintetica
+
+    Cascata per ticker (azioni, ETF, obbligazioni quotate):
+      cache → yfinance (ticker diretto) → sintetica
+
+    Cascata per ISIN ETF noto:
+      cache → yfinance (ISIN_TO_TICKER map) → JustETF scraping → sintetica
     """
     cache = _load_cache()
-    if isin in cache and _cache_valid(cache[isin]):
-        entry = cache[isin]
+    cache_key = isin.strip().upper()
+    if cache_key in cache and _cache_valid(cache[cache_key]):
+        entry = cache[cache_key]
         series_data = entry.get("series")
         if series_data:
             idx = pd.to_datetime(list(series_data.keys()))
             vals = list(series_data.values())
-            return pd.Series(vals, index=idx, name=isin)
+            return pd.Series(vals, index=idx, name=cache_key)
 
     series = None
+    token = cache_key
+    is_pure_isin = _looks_like_isin(token)
+    is_ticker_input = _looks_like_ticker(token)
 
-    # 1. Morningstar
-    series = _fetch_morningstar(isin)
+    # ── Percorso A: ticker diretto (azioni, indici, ETF con ticker) ──────────
+    if is_ticker_input or (ticker and not is_pure_isin):
+        yf_ticker = ticker or token
+        series = _fetch_yfinance(yf_ticker, period=period)
+        # Se non trova con suffisso, prova varianti
+        if series is None and "." not in yf_ticker:
+            for suffix in [".MI", ".L", ".DE", ".F", ".PA"]:
+                series = _fetch_yfinance(yf_ticker + suffix, period=period)
+                if series is not None:
+                    break
 
-    # 2. FondiDoc
+    # ── Percorso B: ISIN di fondo → Morningstar/FondiDoc ────────────────────
+    if series is None and is_pure_isin:
+        series = _fetch_morningstar(token)
+        if series is None:
+            series = _fetch_fondidoc(token)
+            time.sleep(0.2)
+
+    # ── Percorso C: yfinance con ticker risolti (ETF map + varianti) ─────────
     if series is None:
-        series = _fetch_fondidoc(isin)
-        time.sleep(0.2)
+        for try_ticker in _resolve_ticker(token, ticker):
+            series = _fetch_yfinance(try_ticker, period=period)
+            if series is not None:
+                break
+            time.sleep(0.1)
 
-    # 3. yfinance (per ETF con ticker noto)
-    if series is None and ticker:
-        series = _fetch_yfinance(ticker, period=period)
-
-    # 4. Serie sintetica
+    # ── Percorso D: serie sintetica da rendimenti annuali ────────────────────
     if series is None:
         series = _synthetic_series_from_returns(
             perf_1y=perf_1y, perf_3y=perf_3y, perf_ytd=perf_ytd,
@@ -281,9 +361,10 @@ def get_nav_series(
         )
 
     if series is not None and not series.empty:
-        cache[isin] = {
+        cache[cache_key] = {
             "timestamp": datetime.now().isoformat(),
-            "series": {str(k): float(v) for k, v in series.items() if not np.isnan(v)},
+            "series": {str(k): float(v) for k, v in series.items()
+                       if not (isinstance(v, float) and np.isnan(v))},
         }
         _save_cache(cache)
 
@@ -294,10 +375,15 @@ def get_multiple_nav(assets: list[dict], period: str = "3y") -> dict[str, pd.Ser
     """
     Recupera serie per lista di asset.
     Ogni elemento: {"isin": ..., "ticker": ..., "perf_1y": ..., ...}
+
+    Riconosce automaticamente:
+    - ISIN fondi (12 char alfanumerici) → Morningstar/FondiDoc/sintetica
+    - ISIN ETF noti → yfinance via ticker map
+    - Ticker azioni/indici ("AAPL", "ENI.MI", "BTP5.MI") → yfinance diretto
     """
     result = {}
     for asset in assets:
-        isin = asset.get("isin", "")
+        isin = str(asset.get("isin", "")).strip()
         if not isin:
             continue
         series = get_nav_series(
@@ -311,6 +397,22 @@ def get_multiple_nav(assets: list[dict], period: str = "3y") -> dict[str, pd.Ser
             perf_2024=asset.get("perf_2024"),
             period=period,
         )
-        if series is not None and len(series) >= 12:
+        if series is not None and len(series) >= 6:
             result[isin] = series
     return result
+
+
+def classify_asset_type(token: str) -> str:
+    """
+    Classifica un token come tipo di asset per mostrare info utente.
+    Ritorna: 'ETF', 'Fondo', 'Azione/Obbligazione', 'Sconosciuto'
+    """
+    from .etf_tickers import ISIN_TO_TICKER
+    t = token.strip().upper()
+    if t in ISIN_TO_TICKER:
+        return "ETF (ticker noto)"
+    if _looks_like_ticker(t):
+        return "Azione / ETF ticker"
+    if _looks_like_isin(t):
+        return "Fondo / ISIN generico"
+    return "Sconosciuto"
