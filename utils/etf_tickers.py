@@ -44,70 +44,70 @@ ISIN_TO_TICKER: dict[str, str] = {
     "IE00B6R52259": "IUSQ.DE",       # iShares MSCI ACWI
     "IE00B3RBWM25": "VWRL.MI",       # Vanguard FTSE All-World Dist
     "IE00BJ0KDQ92": "XDWD.MI",       # Xtrackers MSCI World
-    "IE00BFY0GT14": "SPPW.MI",       # SPDR MSCI World
+    "IE00BFY0GT14": "SPPW.DE",       # SPDR MSCI World (Xetra)
     "IE000BI8OT95": "WEBN.MI",       # Amundi Core MSCI World
-    "IE00B4X9L533": "HMWO.MI",       # HSBC MSCI World
-    "IE00BD4TXV59": "UC44.MI",       # UBS MSCI World
+    "IE00B4X9L533": "HMWO.L",        # HSBC MSCI World (LSE)
+    "IE00BD4TXV59": "SWRD.L",        # UBS MSCI World (LSE)
     "IE00B8GKDB10": "VHYL.MI",       # Vanguard High Dividend
     "IE00BGV5VN51": "XAIX.MI",       # Xtrackers AI & Big Data
     "IE00BMC38736": "SMH.MI",        # VanEck Semiconductor
     "NL0011683594": "TDIV.MI",       # VanEck Dividend Leaders
-    "IE000YYE6WK5": "DFEN.MI",       # VanEck Defense
-    "IE00B60SX394": "MXWO.MI",       # Invesco MSCI World
+    "IE000YYE6WK5": "DFEN.DE",       # VanEck Defense (Xetra)
+    "IE00B60SX394": "MXWO.L",        # Invesco MSCI World (LSE)
     "IE00BYX2JD69": "SUSW.MI",       # iShares MSCI World SRI
     "IE00BP3QZB59": "IWVL.MI",       # iShares MSCI World Value
 
     # AZIONI USA
-    "IE00B5BMR087": "CSPX.MI",       # iShares S&P 500 Acc
+    "IE00B5BMR087": "CSPX.L",        # iShares S&P 500 Acc (LSE)
     "IE00B3XXRP09": "VUSA.MI",       # Vanguard S&P 500 Dist
     "IE00B3YCGJ38": "SPXS.MI",       # Invesco S&P 500
     "IE00BFMXXD54": "VUAA.MI",       # Vanguard S&P 500 Acc
-    "IE00B53SZB19": "CNDX.MI",       # iShares Nasdaq 100
+    "IE00B53SZB19": "CNDX.L",        # iShares Nasdaq 100 (LSE)
     "IE0031442068": "IUSA.MI",       # iShares Core S&P 500 Dist
-    "LU1135865084": "SP5.MI",        # Amundi S&P 500 Swap
+    "LU1135865084": "RS2K.DE",       # Amundi S&P 500 Swap (Xetra)
     "IE0032077012": "EQQQ.MI",       # Invesco EQQQ Nasdaq
 
     # AZIONI EUROPA
     "LU0908500753": "MEU.MI",        # Amundi Stoxx Europe 600
     "IE00B4K48X80": "SMEA.MI",       # iShares MSCI Europe Acc
-    "IE00B1YZSC51": "IMAE.MI",       # iShares MSCI Europe Dist
-    "DE0002635307": "SX5S.DE",       # iShares STOXX Europe 600
-    "IE00B53L3W79": "CSX5.MI",       # iShares EURO STOXX 50
+    "IE00B1YZSC51": "IEMA.L",        # iShares MSCI Europe Dist (LSE)
+    "DE0002635307": "EXW1.DE",       # iShares STOXX Europe 600 (Xetra)
+    "IE00B53L3W79": "CSX5.L",        # iShares EURO STOXX 50 (LSE)
     "IE00B53QG562": "CSEMU.MI",      # iShares MSCI EMU
 
     # AZIONI EMERGENTI
-    "IE00BKM4GZ66": "EMIM.MI",       # iShares MSCI EM IMI
+    "IE00BKM4GZ66": "EMIM.L",        # iShares MSCI EM IMI (LSE)
     "IE00BTJRMP35": "XMEM.MI",       # Xtrackers MSCI EM
     "IE00B0M63177": "IEEM.MI",       # iShares MSCI EM Dist
-    "IE00BHZPJ239": "PABN.MI",       # iShares MSCI EM ESG
-    "LU0950674175": "UC46.MI",       # UBS MSCI EM
+    "IE00BHZPJ239": "EMSD.L",        # iShares MSCI EM ESG (LSE)
+    "LU0950674175": "CEMS.DE",       # UBS MSCI EM (Xetra fallback)
     "IE00BMG6Z448": "EMXC.MI",       # iShares MSCI EM ex-China
-    "LU2009202107": "AEMX.MI",       # Amundi MSCI EM ex China
+    "LU2009202107": "AMUS.DE",       # Amundi MSCI EM ex China (Xetra)
 
     # OBBLIGAZIONI GOVERNATIVI EUR
     "IE00B4WXJJ64": "IEAG.MI",       # iShares Core Euro Govt Bond
     "IE00BH04GL39": "VGEA.MI",       # Vanguard EUR Eurozone Govt
     "LU1681046261": "EGOV.MI",       # Amundi Euro Govt Green
-    "LU0290356871": "DBXG.MI",       # Xtrackers EZ Govt 1-3Y
+    "LU0290356871": "DBXG.DE",       # Xtrackers EZ Govt 1-3Y (Xetra)
     "LU0290355717": "XGLE.MI",       # Xtrackers EZ Govt
     "IE00B3VTMJ91": "IBGS.MI",       # iShares Euro Govt 1-3Y
     "IE00B1FZS681": "IBGM.MI",       # iShares Euro Govt 3-5Y
 
     # OBBLIGAZIONI SOCIETARI EUR
-    "IE00B3F81R35": "IEBC.MI",       # iShares Core EUR Corp Dist
+    "IE00B3F81R35": "IEBC.L",        # iShares Core EUR Corp Dist (LSE)
     "IE00BF11F565": "IEAA.MI",       # iShares Core EUR Corp Acc
-    "LU1437018168": "ECRI.MI",       # Amundi Corp SRI
+    "LU1437018168": "EUIH.MI",       # Amundi Corp SRI
     "LU0478205379": "XBLC.MI",       # Xtrackers EUR Corp
     "IE00B4L60045": "SE15.MI",       # iShares EUR Corp 1-5Y
     "IE00BCRY6557": "ERNE.MI",       # iShares EUR Ultrashort
-    "LU2037748774": "SHY.MI",        # Amundi Corp SRI 0-3Y
+    "LU2037748774": "SHY",           # Amundi Corp SRI 0-3Y (US ticker proxy)
 
     # OBBLIGAZIONI HIGH YIELD
     "IE00B66F4759": "IHYG.MI",       # iShares EUR HY Dist
     "IE00BJK55C48": "EHYA.MI",       # iShares EUR HY ESG Acc
-    "IE00B4PY7Y77": "SHYU.MI",       # iShares USD HY Dist
+    "IE00B4PY7Y77": "SHYU.L",        # iShares USD HY Dist (LSE)
     "LU1109943388": "XHYG.MI",       # Xtrackers EUR HY
-    "IE00B74DQ490": "GHYS.MI",       # iShares Global HY
+    "IE00B74DQ490": "GHYS.L",        # iShares Global HY (LSE)
     "IE00BCRY6003": "SDHY.MI",       # iShares USD Short Dur HY
     "LU1681040496": "AHYE.MI",       # Amundi Euro HY ESG
     "IE00BF8HV600": "STHY.MI",       # PIMCO US Short-Term HY EUR Hdg
@@ -117,25 +117,25 @@ ISIN_TO_TICKER: dict[str, str] = {
     "IE00B2NPKV68": "IEMB.MI",       # iShares JPM EM USD
     "IE00B9M6RS56": "EMHE.MI",       # iShares JPM EM EUR Hedged
     "IE00BF553838": "JPMG.MI",       # iShares JPM Advanced EM
-    "IE00B6TLBW47": "EMCB.MI",       # iShares JPM EM Corp
-    "IE00BGYWCB81": "VDET.MI",       # Vanguard EM Govt Acc
-    "IE00BZ163L38": "VGEM.MI",       # Vanguard EM Govt Dist
+    "IE00B6TLBW47": "EMCB.DE",       # iShares JPM EM Corp (Xetra fallback)
+    "IE00BGYWCB81": "VDET.L",        # Vanguard EM Govt Acc (LSE)
+    "IE00BZ163L38": "VEGB.L",        # Vanguard EM Govt Dist (LSE)
 
     # iBONDS
     "IE000264WWY0": "IB28.MI",       # iBonds 2028 EUR Corp Dist
-    "IE0008UEVOE0": "IBTE.MI",       # iBonds 2028 EUR Corp Acc
+    "IE0008UEVOE0": "IB28.MI",       # iBonds 2028 EUR Corp Acc (same listing)
     "IE000ZOI8OK5": "IB27.MI",       # iBonds 2027 EUR Corp
     "IE000SIZJ2B2": "IB26.MI",       # iBonds 2026 EUR Corp Dist
-    "IE000WA6L436": "IB2A.MI",       # iBonds 2026 EUR Corp Acc
-    "IE000LX17BP9": "IB30.MI",       # iBonds 2030 EUR Corp
+    "IE000WA6L436": "IB26.MI",       # iBonds 2026 EUR Corp Acc (same listing)
+    "IE000LX17BP9": "IBC0.DE",       # iBonds 2030 EUR Corp (Xetra)
 
     # BTP / ITALIA
     "IE00B3T9LM79": "IBTS.MI",       # iShares Italy Govt (IBTS)
-    "IE00B99470V8": "BTP5.MI",       # iShares BTP 1-3Y
+    "IE00B99470V8": "IBTS.MI",       # iShares BTP 1-3Y (usa IBTS come proxy)
     "IE00B1FZS798": "IBCI.MI",       # iShares EUR Inflation Linked
 
     # MATERIE PRIME
-    "IE00BD6FTQ80": "BCOM.MI",       # Invesco Bloomberg Commodity
+    "IE00BD6FTQ80": "BCOM.L",        # Invesco Bloomberg Commodity (LSE)
     "GB00B15KXQ89": "COPA.MI",       # WisdomTree Copper
     "LU1829218749": "AIGA.MI",       # Amundi Commodity ex-Agri
     "GB00B15KYG56": "IMET.MI",       # WisdomTree Industrial Metals

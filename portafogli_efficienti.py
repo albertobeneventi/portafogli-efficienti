@@ -912,11 +912,11 @@ elif nav == "⭐ Portafoglio Qualità":
     if not df_unified.empty:
         df_unified["_bucket_preview"] = df_unified["classificazione"].apply(classify_bucket)
         bucket_dist = df_unified["_bucket_preview"].value_counts()
-        with st.expander("📊 Distribuzione fondi per bucket (verifica classificazione)"):
+        with st.expander("🔍 Distribuzione fondi per bucket", expanded=False):
             st.dataframe(bucket_dist.reset_index().rename(
                 columns={"_bucket_preview": "Bucket", "count": "N. fondi"}),
                 use_container_width=True, hide_index=True)
-            st.caption("Se Azionario è vuoto → le classificazioni inferite non contengono le parole chiave attese.")
+            st.caption("Se un bucket è vuoto: le classificazioni inferite non matchano le keyword. Apri per diagnosticare.")
 
     # ── COSTRUZIONE PORTAFOGLIO ─────────────────────────────────────────────
     with st.spinner("Costruzione portafoglio per Score Qualità..."):

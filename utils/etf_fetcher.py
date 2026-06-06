@@ -391,12 +391,14 @@ def load_etf_universe(extra_isins: list[str] | None = None) -> pd.DataFrame:
     Carica etf_universe.xlsx se esiste e valido (< 24h),
     altrimenti prova fetch JustETF, fallback su dataset statico.
     """
+    REQUIRED_COLS = {"isin", "nome", "ter", "ticker", "_fonte_ter", "perf_1y"}
     if ETF_UNIVERSE_FILE.exists():
         mod_time = datetime.fromtimestamp(ETF_UNIVERSE_FILE.stat().st_mtime)
         if datetime.now() - mod_time < timedelta(hours=CACHE_TTL_HOURS) and not extra_isins:
             try:
                 df = pd.read_excel(ETF_UNIVERSE_FILE, dtype=str)
-                if not df.empty:
+                # Invalida se mancano colonne del nuovo schema
+                if not df.empty and REQUIRED_COLS.issubset(set(df.columns)):
                     return df
             except Exception:
                 pass
