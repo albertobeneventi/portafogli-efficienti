@@ -146,19 +146,58 @@ def _fetch_fondidoc(isin: str) -> pd.Series | None:
 # ---------------------------------------------------------------------------
 
 def _fetch_yfinance(ticker: str, period: str = "3y") -> pd.Series | None:
+    """Scarica serie mensile da yfinance. Ritorna None se fallisce."""
     try:
         data = yf.download(ticker, period=period, interval="1mo",
-                           auto_adjust=True, progress=False)
+                           auto_adjust=True, progress=False, threads=False)
         if data.empty:
             return None
-        prices = data["Close"]
-        if hasattr(prices, "squeeze"):
-            prices = prices.squeeze()
-        prices.index = pd.to_datetime(prices.index)
-        prices.name = ticker
-        return prices
+        # Gestisci sia MultiIndex (multi-ticker) che Index semplice
+        if hasattr(data.columns, "levels"):
+            close = data["Close"][ticker] if ticker in data["Close"].columns else None
+        else:
+            close = data["Close"] if "Close" in data.columns else None
+        if close is None or close.empty:
+            return None
+        if hasattr(close, "squeeze"):
+            close = close.squeeze()
+        close.index = pd.to_datetime(close.index)
+        close.name = ticker
+        close = close.dropna()
+        return close if len(close) >= 6 else None
     except Exception:
         return None
+
+
+def _fetch_yfinance_with_fallbacks(ticker: str, period: str = "3y") -> pd.Series | None:
+    """
+    Prova il ticker principale, poi varianti di mercato.
+    Utile per ETF che potrebbero non essere quotati su .MI ma su .L o .DE.
+    """
+    # Ticker esatto
+    s = _fetch_yfinance(ticker, period)
+    if s is not None:
+        return s
+
+    # Varianti: cambia suffisso mercato
+    base = ticker.split(".")[0] if "." in ticker else ticker
+    variants = []
+    if ticker.endswith(".MI"):
+        variants = [f"{base}.L", f"{base}.DE", f"{base}.AS", base]
+    elif ticker.endswith(".L"):
+        variants = [f"{base}.MI", f"{base}.DE", f"{base}.AS", base]
+    elif ticker.endswith(".DE"):
+        variants = [f"{base}.L", f"{base}.MI", base]
+    else:
+        variants = [f"{base}.MI", f"{base}.L", f"{base}.DE"]
+
+    for v in variants:
+        if v == ticker:
+            continue
+        s = _fetch_yfinance(v, period)
+        if s is not None:
+            return s
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -345,10 +384,11 @@ def get_nav_series(
             series = _fetch_fondidoc(token)
             time.sleep(0.2)
 
-    # ── Percorso C: yfinance con ticker risolti (ETF map + varianti) ─────────
+    # ── Percorso C: yfinance con ticker risolti (ETF map + varianti mercato) ──
     if series is None:
         for try_ticker in _resolve_ticker(token, ticker):
-            series = _fetch_yfinance(try_ticker, period=period)
+            # Usa la versione con fallback .MI/.L/.DE automatico
+            series = _fetch_yfinance_with_fallbacks(try_ticker, period=period)
             if series is not None:
                 break
             time.sleep(0.1)

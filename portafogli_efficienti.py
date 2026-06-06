@@ -1449,25 +1449,39 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
             with st.spinner(f"Recupero dati storici per {len(sel_isins)} strumenti..."):
                 period_map = {"1Y": "1y", "3Y": "3y", "5Y": "5y"}
                 period = period_map.get(st.session_state["opt_period"], "3y")
-                # Indice rapido df_unified per lookup perf values
+                # Indice lookup perf: df_unified (fondi) + ETF universe (ETF)
                 _du_idx = {}
                 if not df_unified.empty and "isin" in df_unified.columns:
                     for _, _du_r in df_unified.iterrows():
-                        _du_isin = str(_du_r.get("isin",""))
-                        if _du_isin:
-                            _du_idx[_du_isin] = _du_r.to_dict()
+                        _isin_r = str(_du_r.get("isin",""))
+                        if _isin_r:
+                            _du_idx[_isin_r] = _du_r.to_dict()
+                # Aggiunge dati ETF universe (ticker + perf se disponibili)
+                try:
+                    _etf_cached = _load_etf_universe_cached()
+                    for _, _er in _etf_cached.iterrows():
+                        _ei = str(_er.get("isin",""))
+                        if _ei and _ei not in _du_idx:
+                            _du_idx[_ei] = _er.to_dict()
+                        elif _ei:
+                            # Aggiunge ticker se mancante
+                            if not _du_idx[_ei].get("ticker") and _er.get("ticker"):
+                                _du_idx[_ei]["ticker"] = _er.get("ticker")
+                except Exception:
+                    pass
 
                 def _get_perf(isin: str, key: str):
-                    """Cerca perf prima nel pool, poi in df_unified (valori scalati)."""
-                    v = _all_fund_pool.get(isin, {}).get(key)
-                    if v is None or (isinstance(v, float) and np.isnan(v)):
-                        v = _du_idx.get(isin, {}).get(key)
-                    if v is None or (isinstance(v, float) and np.isnan(v)):
-                        return None
-                    try:
-                        return float(v)
-                    except Exception:
-                        return None
+                    """Cerca perf: pool → df_unified → ETF universe."""
+                    for _src in [_all_fund_pool.get(isin, {}), _du_idx.get(isin, {})]:
+                        v = _src.get(key)
+                        if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                            try:
+                                fv = float(v)
+                                if fv != 0.0:   # 0.0 esplicito è spesso placeholder
+                                    return fv
+                            except Exception:
+                                pass
+                    return None
 
                 asset_list = []
                 for isin in sel_isins:
