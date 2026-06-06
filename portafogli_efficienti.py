@@ -707,16 +707,18 @@ elif nav == "📈 Frontiera Efficiente":
         t = (str(cl) + " " + str(nome)).lower()
         return any(k in t for k in _MONETARY_KW)
 
-    def _pick_assets(macro: str, n: int, use_f: bool, prefer_f: bool,
+    def _pick_assets(macro: str, n: int, prefer_f: bool = True,
                      allow_etf: bool = True) -> list:
         """
         Seleziona asset per bucket macro.
-        - use_f=True: tenta fondi da df_unified
-        - prefer_f=True: fondi prima degli ETF
-        - allow_etf=False: nessun ETF fallback (usa solo fondi da Excel)
+        I fondi dall'Excel sono SEMPRE tentati come sorgente primaria se df_unified
+        è caricato. I parametri controllano solo la preferenza e il supplemento ETF:
+        - prefer_f=True : fondi prima degli ETF (se entrambi disponibili)
+        - allow_etf=True : gli ETF completano la selezione se i fondi non bastano
         """
+        # Recupera candidati fondi da df_unified (sempre, se disponibile)
         fund_candidates = []
-        if use_f and not df_unified.empty:
+        if not df_unified.empty:
             from utils.scoring import compute_scores_df
             _fu = compute_scores_df(df_unified.copy())
             _fu["_macro_auto"] = _fu["classificazione"].apply(_macro_from_class)
@@ -739,24 +741,24 @@ elif nav == "📈 Frontiera Efficiente":
 
         etf_candidates = _ETF_FALLBACK.get(macro, []) if allow_etf else []
 
-        if prefer_f and fund_candidates:
+        if prefer_f or not allow_etf:
+            # Fondi prima; ETF solo se abilitati e mancano slot
             selected = fund_candidates[:n]
             if allow_etf:
                 for e in etf_candidates:
                     if e not in selected and len(selected) < n:
                         selected.append(e)
-        elif fund_candidates and not prefer_f:
-            half = n // 2
-            selected = fund_candidates[:half]
-            for e in etf_candidates:
-                if e not in selected and len(selected) < n:
-                    selected.append(e)
         else:
-            # Nessun fondo trovato
-            if allow_etf:
-                selected = etf_candidates[:n]
+            # Mix paritetico: metà fondi, metà ETF (o tutto fondi se ETF mancano)
+            if fund_candidates:
+                half = max(n // 2, 1)
+                selected = fund_candidates[:half]
+                for e in etf_candidates:
+                    if e not in selected and len(selected) < n:
+                        selected.append(e)
             else:
-                selected = []   # no ETF e no fondi → avvisa l'utente più sotto
+                # Nessun fondo → usa ETF puri come fallback
+                selected = etf_candidates[:n]
         return selected
 
     def _inject_azimut(selected: list, n_min: int) -> tuple:
@@ -835,12 +837,13 @@ elif nav == "📈 Frontiera Efficiente":
         _n_min_az = _sf1.number_input(_az_label, 0, max(_n_az_avail, 20),
                                        _prev.get("n_min_az", 0), 1,
                                        help="I migliori per Score Qualita' vengono inclusi automaticamente")
-        _use_fondi  = _sf2.checkbox("Preferisci fondi agli ETF", value=_prev.get("use_fondi", True))
-        _use_etf    = _sf2.checkbox("Includi ETF come alternativa",
-                                    value=_prev.get("use_etf", True),
-                                    help="Se disattivato, vengono usati solo fondi dall'Excel. "
-                                         "Utile quando le serie NAV degli ETF non sono necessarie.")
-        _use_azioni = _sf3.checkbox("Includi azioni FTSE MIB",   value=_prev.get("use_azioni", False))
+        _use_fondi  = _sf2.checkbox("Fondi prima degli ETF", value=_prev.get("use_fondi", True),
+                                    help="I fondi caricati dall'Excel vengono selezionati prima degli ETF. "
+                                         "Disattiva per un mix paritetico fondi/ETF.")
+        _use_etf    = _sf2.checkbox("Includi ETF come supplemento", value=_prev.get("use_etf", True),
+                                    help="Se non ci sono abbastanza fondi per riempire gli slot richiesti, "
+                                         "vengono aggiunti ETF di mercato. Disattiva per usare solo fondi dall'Excel.")
+        _use_azioni = _sf3.checkbox("Includi azioni FTSE MIB", value=_prev.get("use_azioni", False))
 
         st.markdown("---")
 
@@ -934,10 +937,10 @@ elif nav == "📈 Frontiera Efficiente":
         st.session_state["opt_period"] = str(_periodo)
 
         with st.spinner("Selezione strumenti..."):
-            _az_sel = _pick_assets("Azioni",        int(_n_az_str), _use_fondi, _use_fondi, _use_etf) if int(_pct_az)>0 else []
-            _ob_sel = _pick_assets("Obbligazioni",  int(_n_ob_str), _use_fondi, _use_fondi, _use_etf) if int(_pct_ob)>0 else []
+            _az_sel = _pick_assets("Azioni",        int(_n_az_str), _use_fondi, _use_etf) if int(_pct_az)>0 else []
+            _ob_sel = _pick_assets("Obbligazioni",  int(_n_ob_str), _use_fondi, _use_etf) if int(_pct_ob)>0 else []
             _bi_sel = []   # bilanciato non più campo separato
-            _mp_sel = _pick_assets("Materie Prime", int(_n_mp_str), False, False, _use_etf) if (int(_pct_mp)>0 and int(_n_mp_str)>0) else []
+            _mp_sel = _pick_assets("Materie Prime", int(_n_mp_str), False,       _use_etf) if (int(_pct_mp)>0 and int(_n_mp_str)>0) else []
             if _use_azioni:
                 _it = [i for i in ITALIAN_STOCKS if not i.startswith("IT_BTP")][:4]
                 _az_sel = list(dict.fromkeys(_az_sel + _it))
