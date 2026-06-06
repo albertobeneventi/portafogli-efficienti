@@ -62,10 +62,19 @@ st.set_page_config(
 # CSS personalizzato
 st.markdown(f"""
 <style>
-    /* ── Sidebar background ── */
+    /* ── Sidebar sempre visibile — nasconde il pulsante collasso ── */
     [data-testid="stSidebar"] {{
         background-color: {NAVY};
         overflow-y: auto !important;
+    }}
+    /* Nasconde la freccia collasso sidebar */
+    [data-testid="collapsedControl"] {{
+        display: none !important;
+    }}
+    /* Nasconde anche il pulsante < che appare sul bordo */
+    button[kind="header"],
+    [data-testid="stSidebarCollapseButton"] {{
+        display: none !important;
     }}
     /* Testo generico sidebar bianco — solo testo semplice, NON input */
     [data-testid="stSidebar"] p,
