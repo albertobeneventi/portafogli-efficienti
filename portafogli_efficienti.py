@@ -591,22 +591,17 @@ elif nav == "📈 Frontiera Efficiente":
         "🇮🇹 Titoli Italiani", "💰 Dividend", "✏️ ISIN/Ticker libero"
     ])
 
-    # ── Funzione generica di selezione ──────────────────────────────────────
+    # ── Funzione generica di selezione con data_editor ──────────────────────
     def _selection_tab(df: pd.DataFrame, tab_key: str, display_cols: list,
                        col_cfg: dict | None = None, empty_msg: str = "Nessun dato."):
         """
-        Tabella filtrabile + multiselect.
-        Il multiselect si resetta dopo l'aggiunta incrementando un contatore
-        nel key (unica tecnica affidabile in Streamlit senza toccare widget state).
+        Tabella con checkbox editabile direttamente.
+        Usa st.data_editor: spunta ✅ la riga → viene aggiunta alla selezione.
+        Pulsante "Applica" conferma le modifiche.
         """
         if df is None or df.empty:
             st.info(empty_msg)
             return
-
-        # Contatore per resettare il multiselect senza toccare session_state del widget
-        ctr_key = f"_ms_ctr_{tab_key}"
-        if ctr_key not in st.session_state:
-            st.session_state[ctr_key] = 0
 
         srch = st.text_input("🔍 Cerca", key=f"srch_{tab_key}",
                               placeholder="nome, ISIN, categoria…")
@@ -617,70 +612,121 @@ elif nav == "📈 Frontiera Efficiente":
             ).any(axis=1)
             show_df = show_df[m]
 
-        # Tabella con colonna spunta "già in lista"
+        # Costruisce df da mostrare con colonna Seleziona editabile
         show_cols = [c for c in display_cols if c in show_df.columns]
-        disp = show_df[show_cols].copy().head(200)
+        disp = show_df[show_cols].copy().head(200).reset_index(drop=True)
+        # Colonna checkbox precompilata con stato attuale
         if "isin" in disp.columns:
-            disp.insert(0, "✓", disp["isin"].isin(st.session_state["fe_selected_isins"]))
-        cfg = {"✓": st.column_config.CheckboxColumn("In lista", width="small")}
+            disp.insert(0, "Seleziona",
+                        disp["isin"].isin(st.session_state["fe_selected_isins"]))
+
+        # Column config
+        cfg: dict = {
+            "Seleziona": st.column_config.CheckboxColumn(
+                "✅", width="small",
+                help="Spunta per aggiungere al portafoglio",
+            ),
+        }
+        # Rendi non-editabili tutte le colonne tranne "Seleziona"
+        for c in show_cols:
+            if c == "isin":
+                cfg[c] = st.column_config.TextColumn("ISIN", width="small", disabled=True)
+            elif c == "nome":
+                cfg[c] = st.column_config.TextColumn("Nome", width="large", disabled=True)
+            elif c not in (col_cfg or {}):
+                cfg[c] = st.column_config.TextColumn(c.replace("_"," ").title(), disabled=True)
+        # col_cfg sovrascrive (già con disabled=True impostato dal chiamante)
         if col_cfg:
             cfg.update(col_cfg)
-        st.dataframe(disp, use_container_width=True, hide_index=True,
-                     column_config=cfg, height=280)
 
-        # Multiselect con key che cambia ad ogni reset (evita StreamlitAPIException)
-        opts = (show_df["isin"].dropna().astype(str).tolist()
-                if "isin" in show_df.columns else [])
-        sel_key = f"fe_ms_{tab_key}_{st.session_state[ctr_key]}"
-        chosen = st.multiselect(
-            "Seleziona uno o più strumenti da aggiungere",
-            options=opts,
-            format_func=_label,
-            key=sel_key,
-            placeholder="Cerca o scegli…",
+        edited = st.data_editor(
+            disp,
+            use_container_width=True,
+            hide_index=True,
+            column_config=cfg,
+            height=300,
+            key=f"de_{tab_key}",
+            disabled=[c for c in show_cols],   # solo "Seleziona" è editabile
         )
 
-        if st.button(
-            f"➕ Aggiungi {len(chosen)} strument{'o' if len(chosen)==1 else 'i'}",
-            key=f"add_{tab_key}",
-            disabled=len(chosen) == 0,
-            type="primary",
-        ):
-            added = 0
-            for isin in chosen:
-                if isin not in st.session_state["fe_selected_isins"]:
-                    st.session_state["fe_selected_isins"].append(isin)
-                    added += 1
-            # Incrementa contatore → nuovo key → multiselect si svuota
-            st.session_state[ctr_key] += 1
-            if added:
-                st.toast(f"✅ Aggiunti {added} strumenti")
-            st.rerun()
+        # Confronta checkbox prima/dopo per trovare variazioni
+        if "Seleziona" in edited.columns and "isin" in edited.columns:
+            checked   = set(edited[edited["Seleziona"] == True]["isin"].tolist())
+            unchecked = set(edited[edited["Seleziona"] == False]["isin"].tolist())
+            prev_sel  = set(st.session_state["fe_selected_isins"])
+            new_add   = checked - prev_sel
+            new_rem   = unchecked & prev_sel
+
+            if new_add or new_rem:
+                btn_lbl = []
+                if new_add: btn_lbl.append(f"➕ {len(new_add)} aggiunti")
+                if new_rem: btn_lbl.append(f"➖ {len(new_rem)} rimossi")
+                if st.button(
+                    "✅ Applica selezione  ·  " + "  ".join(btn_lbl),
+                    key=f"apply_{tab_key}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    for isin in new_add:
+                        if isin not in st.session_state["fe_selected_isins"]:
+                            st.session_state["fe_selected_isins"].append(isin)
+                    st.session_state["fe_selected_isins"] = [
+                        i for i in st.session_state["fe_selected_isins"]
+                        if i not in new_rem
+                    ]
+                    if new_add:
+                        st.toast(f"✅ Aggiunti {len(new_add)} strumenti")
+                    if new_rem:
+                        st.toast(f"🗑️ Rimossi {len(new_rem)} strumenti")
+                    st.rerun()
+            else:
+                n_sel = len(checked & prev_sel)
+                if n_sel:
+                    st.caption(f"✅ {n_sel} strument{'o' if n_sel==1 else 'i'} selezionat{'o' if n_sel==1 else 'i'} in questa lista")
 
     FUND_COLS = ["isin", "nome", "classificazione", "perf_1y", "perf_3y", "volatilita", "rating_fida"]
     ETF_COLS  = ["isin", "nome", "categoria", "ter", "perf_1y", "perf_3y"]
     IT_COLS   = ["isin", "ticker", "nome", "settore"]
     DIV_COLS  = ["isin", "ticker", "nome", "settore", "paese", "div_yield_est"]
 
+    _FUND_CFG = {
+        "classificazione": st.column_config.TextColumn("Classificazione", disabled=True),
+        "perf_1y":  st.column_config.NumberColumn("Perf 1Y %", format="%.1f", disabled=True),
+        "perf_3y":  st.column_config.NumberColumn("Perf 3Y %", format="%.1f", disabled=True),
+        "volatilita": st.column_config.NumberColumn("Vol %", format="%.1f", disabled=True),
+        "rating_fida": st.column_config.NumberColumn("★ FIDA", format="%d", disabled=True),
+    }
+    _ETF_CFG = {
+        "categoria": st.column_config.TextColumn("Categoria", disabled=True),
+        "ter":    st.column_config.NumberColumn("TER %", format="%.2f", disabled=True),
+        "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.1f", disabled=True),
+        "perf_3y": st.column_config.NumberColumn("Perf 3Y %/a", format="%.1f", disabled=True),
+    }
+    _IT_CFG = {
+        "ticker":  st.column_config.TextColumn("Ticker", width="small", disabled=True),
+        "settore": st.column_config.TextColumn("Settore", disabled=True),
+    }
+    _DIV_CFG = {
+        "ticker":  st.column_config.TextColumn("Ticker", width="small", disabled=True),
+        "settore": st.column_config.TextColumn("Settore", disabled=True),
+        "paese":   st.column_config.TextColumn("Paese", width="small", disabled=True),
+        "div_yield_est": st.column_config.NumberColumn("Yield % (stima)", format="%.1f", disabled=True),
+    }
+
     with fe_tab_a:
         if lista_a.empty:
             st.warning("Carica i file Excel dalla sidebar per vedere i fondi generalisti.")
         else:
-            _selection_tab(lista_a, "A", FUND_COLS)
+            _selection_tab(lista_a, "A", FUND_COLS, col_cfg=_FUND_CFG)
 
     with fe_tab_b:
         if lista_b.empty:
             st.warning("Carica i file Excel dalla sidebar per vedere i fondi tematici.")
         else:
-            _selection_tab(lista_b, "B", FUND_COLS)
+            _selection_tab(lista_b, "B", FUND_COLS, col_cfg=_FUND_CFG)
 
     with fe_tab_c:
-        etf_cfg = {
-            "ter":    st.column_config.NumberColumn("TER %", format="%.2f"),
-            "perf_1y":st.column_config.NumberColumn("Perf 1Y %", format="%.1f"),
-            "perf_3y":st.column_config.NumberColumn("Perf 3Y %/a", format="%.1f"),
-        }
-        _selection_tab(df_etf_fe, "C", ETF_COLS, col_cfg=etf_cfg,
+        _selection_tab(df_etf_fe, "C", ETF_COLS, col_cfg=_ETF_CFG,
                        empty_msg="ETF Universe non caricato.")
 
     with fe_tab_it:
@@ -692,26 +738,20 @@ elif nav == "📈 Frontiera Efficiente":
             if not isin.startswith("IT_BTP")
         ])
         _pool_from_df(df_it)
-        it_cfg = {"ticker": st.column_config.TextColumn("Ticker", width="small")}
-        _selection_tab(df_it, "IT", IT_COLS, col_cfg=it_cfg,
+        _selection_tab(df_it, "IT", IT_COLS, col_cfg=_IT_CFG,
                        empty_msg="Nessun titolo italiano.")
 
     with fe_tab_div:
         st.caption("Top 30 azioni non-USA — Fonte: TDIV/EUDV. Yield stimato, verificare su Yahoo Finance.")
         df_div = get_dividend_stocks_df()
         _pool_from_df(df_div)
-        div_cfg = {
-            "div_yield_est": st.column_config.NumberColumn("Yield % (stima)", format="%.1f"),
-            "paese": st.column_config.TextColumn("Paese", width="small"),
-        }
-        # Filtri rapidi
         _fc1, _fc2 = st.columns(2)
         _fp = _fc1.selectbox("Paese", ["Tutti"]+sorted(df_div["paese"].unique().tolist()), key="dp_paese")
         _fs = _fc2.selectbox("Settore", ["Tutti"]+sorted(df_div["settore"].unique().tolist()), key="dp_sett")
         df_div_f = df_div.copy()
         if _fp != "Tutti": df_div_f = df_div_f[df_div_f["paese"] == _fp]
         if _fs != "Tutti": df_div_f = df_div_f[df_div_f["settore"] == _fs]
-        _selection_tab(df_div_f.reset_index(drop=True), "DIV", DIV_COLS, col_cfg=div_cfg)
+        _selection_tab(df_div_f.reset_index(drop=True), "DIV", DIV_COLS, col_cfg=_DIV_CFG)
 
     with fe_tab_isin:
         st.markdown("""
@@ -1026,21 +1066,57 @@ elif nav == "📈 Frontiera Efficiente":
     )
 
     # ── STEP 2b: BLACK-LITTERMAN ───────────────────────────────────────────
-    with st.expander("⚙️ Black-Litterman (opzionale)"):
-        use_bl = st.checkbox("Abilita Black-Litterman")
+    with st.expander("🔮 Black-Litterman — aggiungi le tue view di mercato", expanded=False):
+        st.markdown("""
+**Cos'è Black-Litterman?**
+Combina i rendimenti di equilibrio di mercato (prior) con le **tue aspettative personali**
+su uno o più asset. Se pensi che l'azionario emergente renderà il 12% nei prossimi 3 anni,
+puoi inserirlo — il modello bilanicia questa view con il mercato in base alla tua confidenza.
+
+> 💡 **Quando usarlo**: hai una tesi su uno specifico asset.
+> Se non hai view particolari, usa Max Sharpe o Min Varianza.
+""")
+        use_bl = st.checkbox("✅ Abilita Black-Litterman", key="use_bl_chk")
         bl_views: dict = {}
         bl_conf: dict = {}
-        if use_bl and sel_isins:
-            st.caption("Inserisci le tue aspettative di rendimento per uno o più asset:")
-            for isin in sel_isins[:15]:
-                nome_bl = str(_all_fund_pool.get(isin, {}).get("nome", isin))[:45]
-                c1, c2, c3 = st.columns([3, 2, 2])
-                en = c1.checkbox(f"{isin} — {nome_bl}", key=f"bl_en_{isin}")
-                if en:
-                    bl_views[isin] = c2.number_input("Rend. atteso (%)", -30.0, 60.0, 5.0,
-                                                      key=f"bl_r_{isin}")
-                    bl_conf[isin] = c3.slider("Confidenza", 0.1, 1.0, 0.5,
-                                               key=f"bl_c_{isin}")
+        if use_bl:
+            if not sel_isins:
+                st.warning("Aggiungi prima gli strumenti nella sezione precedente.")
+            else:
+                st.markdown("---")
+                st.markdown("**Inserisci le tue view** — spunta solo gli asset su cui hai un'opinione:")
+                for isin in sel_isins[:15]:
+                    info_bl = _all_fund_pool.get(isin, {})
+                    nome_bl = str(info_bl.get("nome", isin))[:50]
+                    class_bl = str(info_bl.get("classificazione", info_bl.get("categoria","")))[:30]
+
+                    with st.container():
+                        c1, c2, c3 = st.columns([3, 2, 2])
+                        en = c1.checkbox(
+                            f"**{nome_bl}**",
+                            help=f"ISIN: {isin} | {class_bl}",
+                            key=f"bl_en_{isin}",
+                        )
+                        if en:
+                            bl_views[isin] = c2.number_input(
+                                "Rendimento atteso (%)",
+                                min_value=-30.0, max_value=60.0, value=8.0, step=0.5,
+                                key=f"bl_r_{isin}",
+                                help="La tua aspettativa di rendimento annuo per questo asset",
+                            )
+                            bl_conf[isin] = c3.slider(
+                                "Confidenza",
+                                min_value=0.1, max_value=1.0, value=0.5, step=0.1,
+                                key=f"bl_c_{isin}",
+                                help="1.0 = molto sicuro, 0.1 = incerto",
+                            )
+                if bl_views:
+                    st.success(
+                        f"✅ {len(bl_views)} view inserit{'a' if len(bl_views)==1 else 'e'}. "
+                        "Il portafoglio Black-Litterman apparirà nei risultati dopo il calcolo."
+                    )
+                else:
+                    st.info("Spunta almeno un asset per inserire una view.")
 
     # ── STEP 3: CALCOLO ────────────────────────────────────────────────────
     st.markdown("---")
