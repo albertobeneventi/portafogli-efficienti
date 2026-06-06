@@ -1477,14 +1477,14 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                 "ricarica i file Excel e ricalcola."
             )
 
-        # ── Grafico Frontiera Efficiente ─────────────────────────────────
+        # ── Grafico Frontiera Efficiente — stile Markowitz classico ─────
         fig_fe = go.Figure()
-
-        # Raccogli tutti i punti validi per calcolare range assi
-        _all_vols = []
-        _all_rets = []
-        mc = result.get("monte_carlo", pd.DataFrame())
+        mc       = result.get("monte_carlo", pd.DataFrame())
         frontier = result.get("frontier_df", pd.DataFrame())
+        mv_data  = result.get("min_variance", {})
+
+        # Calcolo range assi
+        _all_vols, _all_rets = [], []
         if not mc.empty:
             _all_vols += (mc["vol"]*100).tolist()
             _all_rets += (mc["ret"]*100).tolist()
@@ -1492,175 +1492,226 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
             _all_vols += (frontier["vol"]*100).tolist()
             _all_rets += (frontier["ret"]*100).tolist()
 
-        # Range assi con padding
-        def _axis_range(vals: list, pad_pct=0.15):
+        def _axis_range(vals, pad=0.18):
             if not vals: return [0, 1]
             lo, hi = min(vals), max(vals)
-            span = max(hi - lo, 0.1)
-            return [round(lo - span*pad_pct, 2), round(hi + span*pad_pct, 2)]
+            span = max(hi - lo, 0.5)
+            return [round(lo - span*pad, 2), round(hi + span*pad, 2)]
 
         x_range = _axis_range(_all_vols)
         y_range = _axis_range(_all_rets)
 
-        # 1. Nuvola Monte Carlo — colorata per Sharpe, trasparente
+        # ── 1. Punti dei singoli asset (portafogli con 100% in 1 asset) ──
+        _asset_points = []
+        for _isin in price_dict:
+            _s = price_dict[_isin]
+            if isinstance(_s, pd.Series) and len(_s) >= 12:
+                try:
+                    _s2 = _s.copy(); _s2.index = pd.to_datetime(_s2.index)
+                    _rets = _s2.pct_change().dropna()
+                    _ar = float(_rets.mean() * 12 * 100)   # annualizzato %
+                    _av = float(_rets.std() * (12**0.5) * 100)  # annualizzata %
+                    _nm = str(_all_fund_pool.get(_isin, {}).get("nome", _isin))[:25]
+                    _asset_points.append({"isin": _isin, "nome": _nm,
+                                          "vol": round(_av,2), "ret": round(_ar,2)})
+                except Exception:
+                    pass
+
+        if _asset_points:
+            _ap_df = pd.DataFrame(_asset_points)
+            fig_fe.add_trace(go.Scatter(
+                x=_ap_df["vol"], y=_ap_df["ret"],
+                mode="markers+text",
+                marker=dict(color="#555", size=9, symbol="circle",
+                            line=dict(color="white", width=1)),
+                text=_ap_df["nome"],
+                textposition="top right",
+                textfont=dict(size=9, color="#444"),
+                name="Singoli asset",
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "Vol: <b>%{x:.1f}%</b>  Rend: <b>%{y:.1f}%</b>"
+                    "<extra></extra>"
+                ),
+            ))
+
+        # ── 2. Nuvola Monte Carlo — punti grigi piccoli ──────────────────
         if not mc.empty:
             fig_fe.add_trace(go.Scatter(
                 x=(mc["vol"]*100).round(2),
                 y=(mc["ret"]*100).round(2),
                 mode="markers",
-                marker=dict(
-                    color=mc["sharpe"].round(3),
-                    colorscale=[
-                        [0.0, "#FEF9C3"], [0.3, "#FED76A"],
-                        [0.6, "#F97316"], [1.0, "#DC2626"],
-                    ],
-                    size=5, opacity=0.45,
-                    colorbar=dict(
-                        title=dict(text="Sharpe", font=dict(size=11)),
-                        thickness=14, len=0.55, x=1.02,
-                        tickfont=dict(size=10),
-                    ),
-                    showscale=True,
-                ),
-                name="Portafogli simulati (MC)",
-                hovertemplate=(
-                    "Volatilità: <b>%{x:.2f}%</b><br>"
-                    "Rendimento: <b>%{y:.2f}%</b><br>"
-                    "Sharpe: <b>%{marker.color:.2f}</b>"
-                    "<extra>Monte Carlo</extra>"
-                ),
+                marker=dict(color="rgba(150,160,180,0.35)", size=4),
+                name="Portafogli ammissibili",
+                hovertemplate="Vol: %{x:.1f}%  Rend: %{y:.1f}%<extra></extra>",
             ))
 
-        # 2. Curva frontiera efficiente
+        # ── 3. Frontiera superiore (Tratto efficiente) — linea spessa blu ─
         if not frontier.empty:
+            _fr = frontier.sort_values("vol")
             fig_fe.add_trace(go.Scatter(
-                x=(frontier["vol"]*100).round(2),
-                y=(frontier["ret"]*100).round(2),
+                x=(_fr["vol"]*100).round(2),
+                y=(_fr["ret"]*100).round(2),
                 mode="lines",
-                line=dict(color=NAVY, width=3, dash="solid"),
-                name="Frontiera Efficiente",
-                hovertemplate=(
-                    "Frontiera | Vol: <b>%{x:.2f}%</b> · Rend: <b>%{y:.2f}%</b>"
-                    "<extra></extra>"
-                ),
+                line=dict(color=NAVY, width=3.5),
+                name="Tratto efficiente",
+                hovertemplate="Frontiera | Vol: <b>%{x:.1f}%</b>  Rend: <b>%{y:.1f}%</b><extra></extra>",
             ))
 
-        # 3. Area ombreggiata sotto la frontiera (zona sub-ottimale)
-        if not frontier.empty and len(frontier) > 2:
-            fig_fe.add_trace(go.Scatter(
-                x=(frontier["vol"]*100).round(2).tolist() +
-                  [x_range[0], x_range[0]],
-                y=(frontier["ret"]*100).round(2).tolist() +
-                  [(frontier["ret"]*100).min(), (frontier["ret"]*100).min()],
-                fill="toself",
-                fillcolor=f"rgba(26,44,84,0.06)",
-                line=dict(color="rgba(0,0,0,0)"),
-                showlegend=False,
-                hoverinfo="skip",
-            ))
+        # ── 4. Tratto inefficiente (riflessione sotto Min Varianza) ──────
+        # Costruisce la parte inferiore della parabola dal Monte Carlo:
+        # per ogni bucket di volatilità prende il rendimento MINIMO
+        if not mc.empty and mv_data and "vol" not in (mv_data.get("error",""),):
+            _mv_vol = mv_data.get("vol", 0) * 100
+            _mc_above_mv = mc[mc["vol"]*100 >= _mv_vol - 0.5].copy()
+            if len(_mc_above_mv) > 10:
+                _mc_above_mv["vol_pct"] = (_mc_above_mv["vol"]*100).round(1)
+                _lower = (_mc_above_mv.groupby("vol_pct")["ret"]
+                          .min().reset_index())
+                _lower = _lower.sort_values("vol_pct")
+                # Filtra solo punti sotto la frontiera efficiente
+                if not frontier.empty:
+                    _fr_min_ret = float(frontier["ret"].min()) * 100
+                    _lower = _lower[_lower["ret"]*100 <= _fr_min_ret + 2]
+                if len(_lower) >= 3:
+                    fig_fe.add_trace(go.Scatter(
+                        x=_lower["vol_pct"],
+                        y=(_lower["ret"]*100).round(2),
+                        mode="lines",
+                        line=dict(color="#94A3B8", width=2.5, dash="dot"),
+                        name="Tratto inefficiente",
+                        hovertemplate="Inefficiente | Vol: %{x:.1f}%  Rend: %{y:.1f}%<extra></extra>",
+                    ))
 
-        # 4. Portafogli ottimali con annotazioni
-        _pf_configs = [
-            (ms,                             "Max Sharpe",      "#DC2626", "star",    24, "top right"),
-            (result.get("min_variance", {}), "Min Varianza",    "#1D4ED8", "diamond", 20, "bottom right"),
-            (bl_result or {},                "Black-Litterman", "#16A34A", "pentagon",20, "top left"),
-        ]
+        # ── 5. Punto Min Varianza con linea tratteggiata orizzontale ─────
         _annotations = []
-        for pdata, pname, pcolor, psym, psz, _pos in _pf_configs:
-            if not pdata or "error" in pdata or not pdata.get("vol"):
-                continue
-            vx = round(pdata["vol"] * 100, 2)
-            vy = round(pdata["ret"] * 100, 2)
-            sh = round(pdata.get("sharpe", 0), 3)
-
+        if mv_data and "error" not in mv_data and mv_data.get("vol"):
+            _mv_v = round(mv_data["vol"]*100, 2)
+            _mv_r = round(mv_data["ret"]*100, 2)
+            # Linea tratteggiata orizzontale dal punto Min Var a sinistra
+            fig_fe.add_shape(
+                type="line",
+                x0=x_range[0], x1=_mv_v,
+                y0=_mv_r,     y1=_mv_r,
+                line=dict(color="#64748B", width=1.5, dash="dash"),
+            )
             fig_fe.add_trace(go.Scatter(
-                x=[vx], y=[vy],
+                x=[_mv_v], y=[_mv_r],
                 mode="markers",
-                marker=dict(
-                    color=pcolor, size=psz, symbol=psym,
-                    line=dict(color="white", width=2),
-                ),
-                name=f"{pname}  ·  Sharpe {sh:.2f}",
+                marker=dict(color="#1D4ED8", size=14, symbol="diamond",
+                            line=dict(color="white", width=2)),
+                name=f"Min Varianza  (Vol {_mv_v:.1f}%  Rend {_mv_r:.1f}%)",
                 hovertemplate=(
-                    f"<b>{pname}</b><br>"
-                    "Volatilità: <b>%{x:.2f}%</b><br>"
-                    "Rendimento: <b>%{y:.2f}%</b><br>"
-                    f"Sharpe: <b>{sh}</b>"
+                    "<b>Minima Varianza</b><br>"
+                    "Vol: <b>%{x:.2f}%</b><br>"
+                    "Rend: <b>%{y:.2f}%</b>"
+                    "<extra></extra>"
+                ),
+            ))
+            # Etichetta "Tratto efficiente" e "Tratto inefficiente" come annotation
+            if not frontier.empty:
+                _fr_max_r = float(frontier["ret"].max()) * 100
+                _annotations.append(dict(
+                    x=_mv_v + (x_range[1]-_mv_v)*0.5,
+                    y=(_mv_r + _fr_max_r) / 2,
+                    text="<b>Tratto efficiente</b>",
+                    showarrow=False,
+                    font=dict(size=12, color=NAVY),
+                    bgcolor="rgba(255,255,255,0.75)",
+                    bordercolor=NAVY, borderwidth=1, borderpad=4,
+                ))
+                _annotations.append(dict(
+                    x=_mv_v + (x_range[1]-_mv_v)*0.35,
+                    y=_mv_r - (_fr_max_r - _mv_r) * 0.35,
+                    text="<i>Tratto inefficiente</i>",
+                    showarrow=False,
+                    font=dict(size=11, color="#64748B"),
+                    bgcolor="rgba(255,255,255,0.75)",
+                    bordercolor="#94A3B8", borderwidth=1, borderpad=3,
+                ))
+
+        # ── 6. Max Sharpe ─────────────────────────────────────────────────
+        if ms and "error" not in ms and ms.get("vol"):
+            _ms_v = round(ms["vol"]*100, 2)
+            _ms_r = round(ms["ret"]*100, 2)
+            _ms_s = round(ms.get("sharpe",0), 2)
+            fig_fe.add_trace(go.Scatter(
+                x=[_ms_v], y=[_ms_r],
+                mode="markers",
+                marker=dict(color="#DC2626", size=18, symbol="star",
+                            line=dict(color="white", width=2)),
+                name=f"Max Sharpe  (Vol {_ms_v:.1f}%  Rend {_ms_r:.1f}%  Sharpe {_ms_s})",
+                hovertemplate=(
+                    "<b>Max Sharpe</b><br>"
+                    "Vol: <b>%{x:.2f}%</b><br>"
+                    "Rend: <b>%{y:.2f}%</b><br>"
+                    f"Sharpe: <b>{_ms_s}</b>"
+                    "<extra></extra>"
+                ),
+            ))
+            _annotations.append(dict(
+                x=_ms_v, y=_ms_r,
+                ax=55, ay=-45,
+                xref="x", yref="y", axref="pixel", ayref="pixel",
+                text=f"<b style='color:#DC2626'>Max Sharpe</b><br>"
+                     f"Rend {_ms_r:.1f}% · Vol {_ms_v:.1f}%<br>"
+                     f"Sharpe {_ms_s}",
+                showarrow=True,
+                arrowhead=2, arrowwidth=1.5, arrowcolor="#DC2626",
+                font=dict(size=10), bgcolor="white",
+                bordercolor="#DC2626", borderwidth=1.5, borderpad=4,
+            ))
+
+        # ── 7. Black-Litterman (se presente) ────────────────────────────
+        if bl_result and "error" not in bl_result and bl_result.get("vol"):
+            _bl_v = round(bl_result["vol"]*100, 2)
+            _bl_r = round(bl_result["ret"]*100, 2)
+            fig_fe.add_trace(go.Scatter(
+                x=[_bl_v], y=[_bl_r],
+                mode="markers",
+                marker=dict(color="#16A34A", size=15, symbol="pentagon",
+                            line=dict(color="white", width=2)),
+                name=f"Black-Litterman  (Vol {_bl_v:.1f}%  Rend {_bl_r:.1f}%)",
+                hovertemplate=(
+                    "<b>Black-Litterman</b><br>"
+                    "Vol: <b>%{x:.2f}%</b>  Rend: <b>%{y:.2f}%</b>"
                     "<extra></extra>"
                 ),
             ))
 
-            # Annotazione con riquadro
-            ay_off = 45 if "top" in _pos else -45
-            ax_off = 60 if "right" in _pos else -60
-            _annotations.append(dict(
-                x=vx, y=vy,
-                ax=ax_off, ay=ay_off,
-                xref="x", yref="y", axref="x", ayref="y",
-                # usa offset pixel
-                text=(
-                    f"<b style='color:{pcolor}'>{pname}</b><br>"
-                    f"Rend: <b>{vy:.1f}%</b> | Vol: <b>{vx:.1f}%</b><br>"
-                    f"Sharpe: <b>{sh:.2f}</b>"
-                ),
-                showarrow=True,
-                arrowhead=2, arrowsize=1.2, arrowwidth=1.8,
-                arrowcolor=pcolor,
-                font=dict(size=10.5),
-                bgcolor="white",
-                bordercolor=pcolor,
-                borderwidth=1.5,
-                borderpad=5,
-                opacity=0.95,
-            ))
-
-        # Layout professionale
+        # ── Layout ────────────────────────────────────────────────────────
         fig_fe.update_layout(
             title=dict(
-                text=(
-                    "<b>Frontiera Efficiente</b>  "
-                    "<span style='font-size:13px;color:#666'>— Rischio vs Rendimento atteso</span>"
-                ),
-                font=dict(size=17, color=NAVY),
-                x=0.01,
+                text="<b>Frontiera Efficiente</b>  "
+                     "<span style='font-size:12px;color:#666'>E(Rp) vs σ</span>",
+                font=dict(size=16, color=NAVY), x=0.03,
             ),
             xaxis=dict(
-                title=dict(text="Volatilità annua (%)", font=dict(size=12)),
-                tickformat=".1f",
-                ticksuffix="%",
-                gridcolor="#E9EEF4",
-                showgrid=True,
-                zeroline=False,
-                range=x_range,
-                tickfont=dict(size=11),
+                title=dict(text="Rischio — Volatilità annua σ (%)", font=dict(size=12)),
+                tickformat=".1f", ticksuffix="%",
+                gridcolor="#EEF1F6", showgrid=True, zeroline=False,
+                range=x_range, tickfont=dict(size=11),
             ),
             yaxis=dict(
-                title=dict(text="Rendimento atteso annuo (%)", font=dict(size=12)),
-                tickformat=".1f",
-                ticksuffix="%",
-                gridcolor="#E9EEF4",
-                showgrid=True,
-                zeroline=False,
-                range=y_range,
-                tickfont=dict(size=11),
+                title=dict(text="Rendimento atteso E(Rp) (%)", font=dict(size=12)),
+                tickformat=".1f", ticksuffix="%",
+                gridcolor="#EEF1F6", showgrid=True, zeroline=False,
+                range=y_range, tickfont=dict(size=11),
             ),
-            plot_bgcolor="#FAFBFD",
+            plot_bgcolor="white",
             paper_bgcolor="white",
-            height=580,
+            height=600,
             annotations=_annotations,
             legend=dict(
                 orientation="h",
-                yanchor="bottom", y=-0.20,
+                yanchor="bottom", y=-0.22,
                 xanchor="center", x=0.5,
                 bgcolor="rgba(255,255,255,0.9)",
                 bordercolor="#DDD", borderwidth=1,
-                font=dict(size=11),
+                font=dict(size=10),
             ),
-            margin=dict(t=70, b=110, l=70, r=80),
-            hoverlabel=dict(
-                bgcolor="white", bordercolor="#CCC",
-                font=dict(size=12),
-            ),
+            margin=dict(t=60, b=120, l=65, r=30),
+            hoverlabel=dict(bgcolor="white", font=dict(size=11)),
         )
         st.plotly_chart(fig_fe, use_container_width=True, config={
             "displayModeBar": True,
