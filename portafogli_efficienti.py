@@ -1053,7 +1053,7 @@ elif nav == "📈 Frontiera Efficiente":
     # ── STEP 2: VINCOLI ────────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("2️⃣ Vincoli di peso")
-    v_col1, v_col2, v_col3 = st.columns(3)
+    v_col1, v_col2, v_col3, v_col4 = st.columns(4)
     min_w = v_col1.slider("Peso minimo per asset (%)", 0, 20,
                            st.session_state["min_weight"]) / 100
     max_w = v_col2.slider("Peso massimo per asset (%)", 10, 100,
@@ -1064,6 +1064,29 @@ elif nav == "📈 Frontiera Efficiente":
         format_func=lambda x: f"{x}",
         key="fe_forced_include",
     )
+    # Fondi Azimut nella selezione corrente
+    _azimut_in_sel = [
+        i for i in sel_isins
+        if _all_fund_pool.get(i, {}).get("_source") == "azimut"
+        or _all_fund_pool.get(i, {}).get("casa","").lower() == "azimut"
+    ]
+    n_min_azimut = v_col4.number_input(
+        f"Min fondi Azimut ({len(_azimut_in_sel)} disponibili)",
+        min_value=0,
+        max_value=max(len(_azimut_in_sel), 1),
+        value=0,
+        step=1,
+        key="fe_n_min_azimut",
+        help="Forza l'inclusione di almeno N fondi Azimut nel portafoglio ottimizzato",
+        disabled=len(_azimut_in_sel) == 0,
+    )
+    # Aggiungi fondi Azimut a forced_include se n_min_azimut > 0
+    if n_min_azimut > 0 and _azimut_in_sel:
+        _az_forced = _azimut_in_sel[:int(n_min_azimut)]
+        forced_include_sel = list(dict.fromkeys(
+            (forced_include_sel or []) + _az_forced
+        ))
+        st.caption(f"🔒 Azimut forzati: {', '.join([_all_fund_pool.get(i,{}).get('nome',i)[:35] for i in _az_forced])}")
 
     # ── STEP 2b: BLACK-LITTERMAN ───────────────────────────────────────────
     with st.expander("🔮 Black-Litterman — aggiungi le tue view di mercato", expanded=False):
@@ -1611,7 +1634,20 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                 file_name=f"portafoglio_max_sharpe_{datetime.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            pdf_bytes = export_portfolio_pdf(ms["weights"], metrics, title="Portafoglio Max Sharpe")
+            # Converti grafico frontiera in PNG per il PDF
+            _fe_png = None
+            try:
+                from utils.exporter import plotly_to_png
+                _fe_png = plotly_to_png(fig_fe)
+            except Exception:
+                pass
+            pdf_bytes = export_portfolio_pdf(
+                ms["weights"], metrics,
+                title="Portafoglio Max Sharpe",
+                chart_bytes=_fe_png,
+                fund_df=df_unified if not df_unified.empty else None,
+                fund_pool=_all_fund_pool,
+            )
             if pdf_bytes:
                 exp_c2.download_button(
                     "📄 Esporta PDF (Max Sharpe)", data=pdf_bytes,
@@ -1636,6 +1672,16 @@ elif nav == "⭐ Portafoglio Qualità":
         fondi_per_bucket = st.slider("Fondi per bucket", 2, 8,
                                       st.session_state["fondi_per_bucket"])
         st.session_state["fondi_per_bucket"] = fondi_per_bucket
+        # Fondi Azimut disponibili in df_unified
+        _n_azimut_avail = int((df_unified.get("_source", pd.Series(dtype=str)) == "azimut").sum()) \
+            if not df_unified.empty and "_source" in df_unified.columns else 0
+        n_min_az_pq = st.number_input(
+            f"Min fondi Azimut ({_n_azimut_avail} disponibili)",
+            min_value=0, max_value=max(_n_azimut_avail, 1),
+            value=0, step=1, key="pq_n_min_azimut",
+            help="Garantisce almeno N fondi Azimut nel portafoglio finale",
+            disabled=_n_azimut_avail == 0,
+        )
 
     with cfg_c2:
         st.markdown(f"**Allocazioni target — {profilo}** (modificabili)")
@@ -1896,8 +1942,15 @@ elif nav == "⭐ Portafoglio Qualità":
         exp_c1.download_button("📥 Esporta Excel", data=excel_q,
             file_name=f"portafoglio_qualita_{profilo.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        pdf_q = export_portfolio_pdf(weights_q, metrics_q,
-                                      title=f"Portafoglio Qualità — {profilo}")
+        pdf_q = export_portfolio_pdf(
+            weights_q, metrics_q,
+            title=f"Portafoglio Qualità — {profilo}",
+            fund_df=df_unified if not df_unified.empty else None,
+            fund_pool={r["ISIN"]: {
+                "nome": r["Fondo"], "classificazione": r["Classificazione"],
+                "perf_3y": r.get("Perf 3Y %"), "rating_fida": r.get("★ FIDA"),
+            } for _, r in df_porto.iterrows()},
+        )
         if pdf_q:
             exp_c2.download_button("📄 Esporta PDF", data=pdf_q,
                 file_name=f"portafoglio_qualita_{profilo.lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
