@@ -928,46 +928,34 @@ elif nav == "📈 Frontiera Efficiente":
             disabled=not use_funds,
         )
 
-        # Fondi Azimut disponibili — cerca nel CATALOGO COMPLETO df_azimut
-        # (non solo nelle liste preselezionate, che potrebbero essere vuote)
-        _ac_az_pool = []
-        _ac_az_scored = pd.DataFrame()
-        from utils.scoring import compute_scores_df as _css
-        from utils.data_loader import build_unified_fund_df, AZIMUT_COLS
-
-        # Prima prova df_unified (se i file sono caricati)
-        if not df_unified.empty and "_source" in df_unified.columns:
-            _az_src = df_unified[df_unified["_source"] == "azimut"].copy()
-            if not _az_src.empty:
-                _az_src = _css(_az_src)
-                _az_src = _az_src.sort_values("score_qualita", ascending=False)
-                _ac_az_scored = _az_src
-                _ac_az_pool = _az_src["isin"].dropna().tolist()
-
-        # Fallback: costruisce direttamente da df_azimut (catalogo completo)
-        if not _ac_az_pool and not df_azimut.empty:
-            _az_unified = build_unified_fund_df(pd.DataFrame(), df_azimut)
-            if not _az_unified.empty:
-                _az_unified = _css(_az_unified)
-                _az_unified = _az_unified.sort_values("score_qualita", ascending=False)
-                _ac_az_scored = _az_unified
-                _ac_az_pool = _az_unified["isin"].dropna().tolist()
-
-        _n_az_avail = len(_ac_az_pool)
+        # Conta fondi Azimut disponibili — solo per info, NON blocca il campo
+        _n_az_avail = 0
+        try:
+            if not df_azimut.empty:
+                _n_az_avail = len(df_azimut)
+            elif not df_unified.empty and "_source" in df_unified.columns:
+                _n_az_avail = int((df_unified["_source"] == "azimut").sum())
+        except Exception:
+            pass
 
         n_min_az_ac = _opt_c3.number_input(
-            f"Di cui min fondi Azimut ({_n_az_avail} nel catalogo)",
+            "Min fondi Azimut",
             min_value=0,
-            max_value=max(_n_az_avail, 1),
+            max_value=50,   # limite alto fisso — non dipende dal pool
             value=0, step=1,
             key="ac_n_min_az",
             help=(
-                "Garantisce almeno N fondi Azimut nel portafoglio. "
-                "Ricerca nel catalogo completo Azimut, ordinato per Score Qualità. "
-                "Funziona anche se i fondi Azimut non sono nelle liste preselezionate."
+                f"Inserisci quanti fondi Azimut vuoi garantire nel portafoglio "
+                f"({_n_az_avail} disponibili nel catalogo caricato). "
+                "La ricerca avviene nel catalogo completo Azimut per Score Qualità, "
+                "indipendentemente dalle liste preselezionate."
             ),
-            disabled=_n_az_avail == 0,
+            disabled=False,  # SEMPRE editabile
         )
+        if _n_az_avail > 0:
+            _opt_c3.caption(f"📘 {_n_az_avail} fondi Azimut nel catalogo")
+        else:
+            _opt_c3.caption("⚠️ Carica il file Azimut dalla sidebar")
 
         # ── Sliders allocazione ───────────────────────────────────────────
         ac1, ac2, ac3 = st.columns(3)
@@ -1110,17 +1098,56 @@ elif nav == "📈 Frontiera Efficiente":
             labels = [macro] * len(selected)
             return selected, labels
 
+        # ── Costruzione pool Azimut al momento della composizione ────────
+        # (non pre-costruito, evita problemi di disponibilità)
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _get_azimut_ranked(azimut_json: str) -> list:
+            """Ritorna lista ISIN Azimut ordinata per score qualità."""
+            import io as _io2
+            from utils.scoring import compute_scores_df as _css2
+            from utils.data_loader import build_unified_fund_df as _buf
+            try:
+                _az_df = pd.read_json(_io2.StringIO(azimut_json), orient="records")
+                if _az_df.empty:
+                    return []
+                _az_u = _buf(pd.DataFrame(), _az_df)
+                if _az_u.empty:
+                    return []
+                _az_u = _css2(_az_u)
+                _az_u = _az_u.sort_values("score_qualita", ascending=False)
+                return _az_u["isin"].dropna().tolist()
+            except Exception:
+                return []
+
         # ── Funzione di inserimento fondi Azimut garantiti ────────────────
         def _inject_azimut(selected: list, n_min: int, macro: str) -> list:
-            """Garantisce almeno n_min fondi Azimut nella lista selected."""
-            if n_min <= 0 or not _ac_az_pool:
+            """
+            Garantisce almeno n_min fondi Azimut nella lista.
+            Cerca nel catalogo completo df_azimut ordinato per Score Qualità.
+            """
+            if n_min <= 0:
                 return selected
-            _az_already = [i for i in selected if i in _ac_az_pool]
+
+            # Costruisce il pool Azimut al momento (da df_azimut completo)
+            _az_ranked = []
+            if not df_azimut.empty:
+                try:
+                    _az_ranked = _get_azimut_ranked(df_azimut.to_json(orient="records"))
+                except Exception:
+                    pass
+            # Fallback su df_unified
+            if not _az_ranked and not df_unified.empty and "_source" in df_unified.columns:
+                _az_ranked = df_unified[df_unified["_source"] == "azimut"]["isin"].dropna().tolist()
+
+            if not _az_ranked:
+                return selected  # nessun fondo Azimut disponibile
+
+            _az_already = [i for i in selected if i in set(_az_ranked)]
             _need = n_min - len(_az_already)
             if _need <= 0:
                 return selected
             _result = list(selected)
-            for _az_i in _ac_az_pool:
+            for _az_i in _az_ranked:
                 if _need <= 0:
                     break
                 if _az_i not in _result:
