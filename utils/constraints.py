@@ -180,20 +180,54 @@ PROFILI = {
 }
 
 BUCKET_KEYWORDS = {
-    "Azionario": ["azionari", "equity", "azioni", "stock", "growth"],
-    "Obbligazionario": ["obbligazionari", "bond", "fixed income", "obbligazioni", "monetari"],
-    "Monetario": ["monetari", "money market", "liquidità", "overnight"],
-    "Bilanciato": ["bilanciati", "balanced", "multi-asset", "allocation", "flessibili", "flexible"],
-    "Alternativo": ["ritorno assoluto", "absolute return", "alternativo", "hedge", "long short"],
+    # 1. Monetario — parole esclusive, non ambigue
+    "Monetario": ["money market", "liquidità", "overnight",
+                  "ultra short", "ultrashort", "cash fund", "monetario"],
+    # 2. Alternativo — parole esclusive
+    "Alternativo": ["ritorno assoluto", "absolute return",
+                    "market neutral", "event driven",
+                    "long short", "long/short", "hedge fund"],
+    # 3. Bilanciato — prima di az/obbl per gestire "multi-asset"
+    "Bilanciato": ["bilanciati", "bilanciato", "balanced",
+                   "multi-asset", "multi asset", "allocation",
+                   "flessibili", "flessibile", "flexible",
+                   "patrimoine", "income and growth", "diversified"],
+    # 4. Obbligazionario — PRIMA di Azionario (evita match su "azionari" in "obbligazionari")
+    "Obbligazionario": ["obbligazionari", "obbligazionario",
+                        "bond", "fixed income", "reddito fisso",
+                        "corporate bond", "government bond",
+                        "high yield", "convertibili",
+                        "inflation linked", "duration"],
+    # 5. Azionario — per ultimo, parole non ambigue
+    "Azionario": ["azionari", "azionario", "equity", "azioni", "stock",
+                  "tematici", "tematico", "growth fund", "dividend fund",
+                  "value fund", "small cap", "large cap", "mid cap",
+                  "technology", "healthcare", "biotech",
+                  "innovation", "world equity", "global equity",
+                  "msci world", "s&p 500", "emerging equity"],
 }
 
 
 def classify_bucket(classificazione: str) -> str:
-    """Mappa classificazione FIDA a bucket macro."""
+    """Mappa classificazione FIDA a bucket macro (ordine: Monetario→Alt→Bil→Obbl→Az)."""
+    import re
     cl = str(classificazione).lower()
+
+    def _match(keyword: str) -> bool:
+        # Word-boundary: il keyword non deve essere preceduto/seguito da lettere
+        pattern = r"(?<![a-z])" + re.escape(keyword) + r"(?![a-z])"
+        return bool(re.search(pattern, cl))
+
     for bucket, keywords in BUCKET_KEYWORDS.items():
-        if any(k in cl for k in keywords):
+        if any(_match(k) for k in keywords):
             return bucket
+    # Fallback: parole radice con word-boundary
+    if _match("obbl") or _match("bond") or _match("reddito fisso"):
+        return "Obbligazionario"
+    if _match("azion") or _match("equit") or _match("stock"):
+        return "Azionario"
+    if _match("bilanci") or _match("flexi") or _match("multi"):
+        return "Bilanciato"
     return "Altro"
 
 

@@ -345,329 +345,420 @@ if nav == "🏠 Home":
 # ===========================================================================
 elif nav == "📈 Frontiera Efficiente":
     st.title("📈 Frontiera Efficiente")
-    st.markdown("Ottimizzazione quantitativa con PyPortfolioOpt — Max Sharpe, Min Varianza, Black-Litterman.")
+    st.markdown(
+        "Costruisci un portafoglio ottimizzato con PyPortfolioOpt. "
+        "**Step 1**: scegli gli strumenti → **Step 2**: imposta i vincoli → **Step 3**: calcola."
+    )
 
-    # --- Selezione Asset ---
-    with st.expander("1️⃣ Selezione Asset", expanded=True):
-        sources = st.multiselect(
-            "Sorgenti",
-            ["Lista A (Generalisti)", "Lista B (Tematici)", "Lista C (ETF)", "ISIN liberi"],
-            default=["Lista A (Generalisti)", "Lista C (ETF)"],
+    # ── STEP 1: RICERCA E SELEZIONE STRUMENTI ──────────────────────────────
+    st.subheader("1️⃣ Cerca e seleziona strumenti")
+
+    fe_tab_a, fe_tab_b, fe_tab_c, fe_tab_isin = st.tabs(
+        ["📋 Lista A — Generalisti", "🎯 Lista B — Tematici",
+         "🌐 Lista C — ETF", "✏️ Inserisci ISIN/Ticker"]
+    )
+
+    # Dizionario globale isin→info per tutti gli asset disponibili
+    _all_fund_pool: dict = {}
+
+    def _pool_from_df(df: pd.DataFrame, prefix: str):
+        for _, r in df.iterrows():
+            isin = str(r.get("isin", r.get("ISIN", ""))).strip()
+            if isin:
+                _all_fund_pool[isin] = r.to_dict()
+
+    if not lista_a.empty:
+        _pool_from_df(lista_a, "A")
+    if not lista_b.empty:
+        _pool_from_df(lista_b, "B")
+    try:
+        df_etf_fe = _load_etf_universe_cached()
+        _pool_from_df(df_etf_fe, "C")
+    except Exception:
+        df_etf_fe = pd.DataFrame()
+
+    # Stato selezione
+    if "fe_selected_isins" not in st.session_state:
+        st.session_state["fe_selected_isins"] = []
+
+    def _render_selectable_table(df: pd.DataFrame, tab_key: str, cols_show: list):
+        """Tabella con checkbox per aggiungere alla selezione."""
+        if df.empty:
+            st.info("Nessun dato disponibile.")
+            return
+        search = st.text_input("🔍 Cerca per nome / ISIN / classificazione",
+                               key=f"srch_{tab_key}")
+        disp = df.copy()
+        if search:
+            mask = disp.apply(
+                lambda col: col.astype(str).str.contains(search, case=False, na=False)
+            ).any(axis=1)
+            disp = disp[mask]
+
+        show_cols = [c for c in cols_show if c in disp.columns]
+        if not show_cols:
+            show_cols = list(disp.columns[:6])
+
+        # Aggiungi colonna "Selezionato"
+        disp = disp[show_cols].copy().head(200)
+        if "isin" in disp.columns:
+            disp.insert(0, "➕", disp["isin"].isin(st.session_state["fe_selected_isins"]))
+        st.dataframe(disp, use_container_width=True, hide_index=True,
+                     column_config={"➕": st.column_config.CheckboxColumn("Sel.", width="small")},
+                     height=300)
+
+        # Multiselect per aggiungere alla selezione
+        isin_list = [str(r.get("isin", "")) for _, r in
+                     df[show_cols if "isin" in show_cols else []].iterrows()
+                     if str(r.get("isin", "")).strip()] if "isin" in df.columns else []
+
+        # Filtro ricerca
+        filtered_isins = []
+        if "isin" in df.columns:
+            fdf = df.copy()
+            if search:
+                mask2 = fdf.apply(
+                    lambda col: col.astype(str).str.contains(search, case=False, na=False)
+                ).any(axis=1)
+                fdf = fdf[mask2]
+            filtered_isins = fdf["isin"].dropna().astype(str).tolist()[:200]
+
+        to_add = st.multiselect(
+            "Aggiungi alla selezione",
+            options=filtered_isins,
+            format_func=lambda x: f"{x} — {str(_all_fund_pool.get(x, {}).get('nome', ''))[:55]}",
+            key=f"ms_{tab_key}",
         )
+        if st.button("➕ Aggiungi selezionati", key=f"add_{tab_key}"):
+            for isin in to_add:
+                if isin not in st.session_state["fe_selected_isins"]:
+                    st.session_state["fe_selected_isins"].append(isin)
+            st.rerun()
 
-        all_options = {}
-        if "Lista A (Generalisti)" in sources and not lista_a.empty:
-            for _, r in lista_a.iterrows():
-                label = f"[A] {r['isin']} — {r.get('nome','')[:50]}"
-                all_options[label] = r.to_dict()
-        if "Lista B (Tematici)" in sources and not lista_b.empty:
-            for _, r in lista_b.iterrows():
-                label = f"[B] {r['isin']} — {r.get('nome','')[:50]}"
-                all_options[label] = r.to_dict()
-        if "Lista C (ETF)" in sources:
-            try:
-                df_etf = _load_etf_universe_cached()
-                for _, r in df_etf.iterrows():
-                    label = f"[C] {r.get('isin','')} — {r.get('nome','')[:50]}"
-                    all_options[label] = r.to_dict()
-            except Exception:
-                pass
-        if "ISIN liberi" in sources:
-            custom_isins = st.text_area(
-                "ISIN aggiuntivi (uno per riga)",
-                height=80,
-                key="fe_custom_isins",
-            )
-            if custom_isins:
-                for isin in custom_isins.strip().split("\n"):
-                    isin = isin.strip()
-                    if isin:
-                        all_options[f"[Custom] {isin}"] = {"isin": isin}
+    FUND_COLS = ["isin", "nome", "classificazione", "perf_1y", "perf_3y", "volatilita", "rating_fida"]
+    ETF_COLS  = ["isin", "nome", "categoria", "ter", "aum_mln"]
 
-        selected_labels = st.multiselect(
-            "Seleziona asset per il portafoglio (min 3, max 30)",
-            options=list(all_options.keys()),
-            default=list(all_options.keys())[:5] if len(all_options) >= 5 else list(all_options.keys()),
-            max_selections=30,
-        )
-        selected_assets = [all_options[l] for l in selected_labels]
+    with fe_tab_a:
+        _render_selectable_table(lista_a, "A", FUND_COLS)
+    with fe_tab_b:
+        _render_selectable_table(lista_b, "B", FUND_COLS)
+    with fe_tab_c:
+        _render_selectable_table(df_etf_fe if not df_etf_fe.empty else pd.DataFrame(), "C", ETF_COLS)
+    with fe_tab_isin:
+        st.markdown("Inserisci ISIN o ticker (uno per riga). Esempi: `IE00B4L5Y983`, `AAPL`, `ENI.MI`")
+        custom_raw = st.text_area("ISIN / Ticker", height=120, key="fe_custom_raw",
+                                  placeholder="IE00B4L5Y983\nIE00BK5BQT80\nAAPL")
+        if st.button("➕ Aggiungi ISIN/Ticker", key="add_custom"):
+            for line in custom_raw.strip().split("\n"):
+                token = line.strip().upper()
+                if token and token not in st.session_state["fe_selected_isins"]:
+                    st.session_state["fe_selected_isins"].append(token)
+                    if token not in _all_fund_pool:
+                        _all_fund_pool[token] = {"isin": token, "nome": token}
+            st.rerun()
 
-    # --- Vincoli ---
-    with st.expander("2️⃣ Vincoli di peso"):
-        col1, col2 = st.columns(2)
-        min_w = col1.slider("Peso minimo per asset (%)", 0, 20,
-                             st.session_state["min_weight"]) / 100
-        max_w = col2.slider("Peso massimo per asset (%)", 10, 100,
-                             st.session_state["max_weight"]) / 100
-        forced_include_labels = st.multiselect(
-            "Forza inclusione (peso min 5%)",
-            options=selected_labels,
-            key="fe_forced_include",
-        )
-        forced_include = [
-            all_options[l]["isin"] for l in forced_include_labels
-            if all_options.get(l, {}).get("isin")
-        ]
+    # ── SELEZIONE CORRENTE ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("📌 Strumenti selezionati per l'ottimizzazione")
 
-    # --- Black-Litterman (collassato) ---
-    with st.expander("3️⃣ Black-Litterman (opzionale)"):
+    sel_isins = st.session_state["fe_selected_isins"]
+    if sel_isins:
+        sel_rows = []
+        for isin in sel_isins:
+            info = _all_fund_pool.get(isin, {"isin": isin, "nome": isin})
+            sel_rows.append({
+                "ISIN": isin,
+                "Nome": str(info.get("nome", info.get("FONDO AZIMUT", isin)))[:60],
+                "Classificazione": str(info.get("classificazione", info.get("categoria", ""))),
+                "Perf 1Y %": info.get("perf_1y"),
+                "Perf 3Y %": info.get("perf_3y"),
+                "Volatilità %": info.get("volatilita"),
+            })
+        sel_df = pd.DataFrame(sel_rows)
+        st.dataframe(sel_df, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Perf 1Y %": st.column_config.NumberColumn(format="%.2f"),
+                         "Perf 3Y %": st.column_config.NumberColumn(format="%.2f"),
+                         "Volatilità %": st.column_config.NumberColumn(format="%.2f"),
+                     })
+        # Rimuovi asset
+        to_remove = st.multiselect("Rimuovi dalla selezione",
+                                   options=sel_isins,
+                                   format_func=lambda x: f"{x} — {str(_all_fund_pool.get(x,{}).get('nome',x))[:50]}",
+                                   key="fe_remove")
+        if st.button("🗑️ Rimuovi", key="btn_remove") and to_remove:
+            st.session_state["fe_selected_isins"] = [i for i in sel_isins if i not in to_remove]
+            st.rerun()
+        if st.button("🗑️ Svuota tutto", key="btn_clear_all"):
+            st.session_state["fe_selected_isins"] = []
+            st.session_state.pop("fe_result", None)
+            st.rerun()
+    else:
+        st.info("Nessuno strumento selezionato. Usa i tab qui sopra per aggiungerne.")
+
+    # ── STEP 2: VINCOLI ────────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("2️⃣ Vincoli di peso")
+    v_col1, v_col2, v_col3 = st.columns(3)
+    min_w = v_col1.slider("Peso minimo per asset (%)", 0, 20,
+                           st.session_state["min_weight"]) / 100
+    max_w = v_col2.slider("Peso massimo per asset (%)", 10, 100,
+                           st.session_state["max_weight"]) / 100
+    forced_include_sel = v_col3.multiselect(
+        "Forza inclusione",
+        options=sel_isins,
+        format_func=lambda x: f"{x}",
+        key="fe_forced_include",
+    )
+
+    # ── STEP 2b: BLACK-LITTERMAN ───────────────────────────────────────────
+    with st.expander("⚙️ Black-Litterman (opzionale)"):
         use_bl = st.checkbox("Abilita Black-Litterman")
-        bl_views = {}
-        bl_conf = {}
-        if use_bl and selected_assets:
-            st.markdown("Inserisci view assolute per gli asset:")
-            for asset in selected_assets[:10]:
-                isin = asset.get("isin", "")
-                nome = asset.get("nome", isin)[:40]
-                cols = st.columns([3, 2, 2])
-                abilita = cols[0].checkbox(f"{nome}", key=f"bl_en_{isin}")
-                if abilita:
-                    view_ret = cols[1].number_input(
-                        "Rendimento atteso (%)", -20.0, 50.0, 5.0,
-                        key=f"bl_ret_{isin}"
-                    )
-                    conf = cols[2].slider(
-                        "Confidenza", 0.1, 1.0, 0.5,
-                        key=f"bl_conf_{isin}"
-                    )
-                    bl_views[isin] = view_ret
-                    bl_conf[isin] = conf
+        bl_views: dict = {}
+        bl_conf: dict = {}
+        if use_bl and sel_isins:
+            st.caption("Inserisci le tue aspettative di rendimento per uno o più asset:")
+            for isin in sel_isins[:15]:
+                nome_bl = str(_all_fund_pool.get(isin, {}).get("nome", isin))[:45]
+                c1, c2, c3 = st.columns([3, 2, 2])
+                en = c1.checkbox(f"{isin} — {nome_bl}", key=f"bl_en_{isin}")
+                if en:
+                    bl_views[isin] = c2.number_input("Rend. atteso (%)", -30.0, 60.0, 5.0,
+                                                      key=f"bl_r_{isin}")
+                    bl_conf[isin] = c3.slider("Confidenza", 0.1, 1.0, 0.5,
+                                               key=f"bl_c_{isin}")
 
-    # --- RUN ---
-    run_col, _ = st.columns([1, 3])
-    run = run_col.button("🚀 Calcola Frontiera", type="primary", use_container_width=True)
+    # ── STEP 3: CALCOLO ────────────────────────────────────────────────────
+    st.markdown("---")
+    run_c1, run_c2 = st.columns([1, 4])
+    run = run_c1.button("🚀 Calcola Frontiera", type="primary", use_container_width=True)
+    if run_c2.button("🔄 Reset risultati", use_container_width=False):
+        st.session_state.pop("fe_result", None)
+        st.session_state.pop("fe_price_dict", None)
+        st.rerun()
 
     if run:
-        if len(selected_assets) < 3:
-            st.error("Seleziona almeno 3 asset.")
+        if len(sel_isins) < 3:
+            st.error("Seleziona almeno 3 strumenti.")
         else:
-            with st.spinner("Recupero dati storici..."):
+            with st.spinner(f"Recupero dati storici per {len(sel_isins)} strumenti..."):
                 period_map = {"1Y": "1y", "3Y": "3y", "5Y": "5y"}
                 period = period_map.get(st.session_state["opt_period"], "3y")
-
                 asset_list = []
-                for a in selected_assets:
-                    isin = a.get("isin", "")
+                for isin in sel_isins:
+                    info = _all_fund_pool.get(isin, {})
                     asset_list.append({
                         "isin": isin,
-                        "ticker": a.get("ticker"),
-                        "perf_1y": a.get("perf_1y") or a.get("PERF 1Y"),
-                        "perf_3y": a.get("perf_3y") or a.get("PERF 3Y"),
-                        "perf_ytd": a.get("perf_ytd"),
-                        "perf_2022": a.get("perf_2022") or a.get("perf_2022"),
-                        "perf_2023": a.get("perf_2023"),
-                        "perf_2024": a.get("perf_2024"),
+                        "ticker": info.get("ticker"),
+                        "perf_1y": info.get("perf_1y"),
+                        "perf_3y": info.get("perf_3y"),
+                        "perf_ytd": info.get("perf_ytd"),
+                        "perf_2022": info.get("perf_2022"),
+                        "perf_2023": info.get("perf_2023"),
+                        "perf_2024": info.get("perf_2024"),
                     })
                 price_dict = get_multiple_nav(asset_list, period=period)
 
             if len(price_dict) < 3:
-                st.error(f"Dati insufficienti: solo {len(price_dict)}/{len(selected_assets)} serie recuperate.")
+                st.error(f"Dati storici insufficienti: recuperati {len(price_dict)}/{len(sel_isins)} serie.")
+                st.info("Suggerimento: gli ETF (Lista C) hanno dati su yfinance. I fondi richiedono Morningstar/FondiDoc.")
             else:
-                with st.spinner("Ottimizzazione in corso..."):
+                with st.spinner("Ottimizzazione portafoglio..."):
                     rfr = st.session_state["risk_free_rate"] / 100
                     result = compute_efficient_frontier(
-                        price_dict,
-                        weight_bounds=(min_w, max_w),
+                        price_dict, weight_bounds=(min_w, max_w),
                         risk_free_rate=rfr,
-                        forced_include=forced_include or None,
+                        forced_include=forced_include_sel or None,
                     )
-
                 if "error" in result:
                     st.error(f"Errore ottimizzazione: {result['error']}")
                 else:
-                    st.success(f"Ottimizzazione completata su {len(price_dict)} asset.")
+                    st.success(f"Ottimizzazione completata su {len(price_dict)} strumenti.")
                     st.session_state["fe_result"] = result
                     st.session_state["fe_price_dict"] = price_dict
-                    st.session_state["fe_assets"] = selected_assets
-
-                    # BL
-                    bl_result = None
                     if use_bl and bl_views:
                         with st.spinner("Black-Litterman..."):
-                            bl_result = compute_black_litterman(
+                            bl_r = compute_black_litterman(
                                 price_dict, bl_views, bl_conf,
-                                weight_bounds=(min_w, max_w),
-                                risk_free_rate=rfr,
+                                weight_bounds=(min_w, max_w), risk_free_rate=rfr,
                             )
-                        st.session_state["bl_result"] = bl_result
+                        st.session_state["bl_result"] = bl_r
 
-    # --- Visualizzazione risultati ---
+    # ── RISULTATI ──────────────────────────────────────────────────────────
     if "fe_result" in st.session_state:
-        result = st.session_state["fe_result"]
+        result   = st.session_state["fe_result"]
         price_dict = st.session_state.get("fe_price_dict", {})
-        bl_result = st.session_state.get("bl_result")
+        bl_result  = st.session_state.get("bl_result")
+
+        # Mappa ISIN→nome per label leggibili
+        isin_label = {isin: str(_all_fund_pool.get(isin, {}).get("nome", isin))[:35]
+                      for isin in price_dict}
 
         st.markdown("---")
-        st.subheader("Risultati Ottimizzazione")
+        st.subheader("📊 Risultati Ottimizzazione")
 
-        # Metriche principali
+        # KPI
         m_col = st.columns(4)
-        if "max_sharpe" in result and "error" not in result["max_sharpe"]:
-            ms = result["max_sharpe"]
-            m_col[0].metric("Max Sharpe — Rendimento", f"{ms['ret']*100:.2f}%")
-            m_col[1].metric("Max Sharpe — Volatilità", f"{ms['vol']*100:.2f}%")
-            m_col[2].metric("Max Sharpe — Sharpe", f"{ms['sharpe']:.3f}")
+        ms = result.get("max_sharpe", {})
+        if ms and "error" not in ms:
+            m_col[0].metric("📈 Rendimento (Max Sharpe)", f"{ms['ret']*100:.2f}%")
+            m_col[1].metric("📉 Volatilità (Max Sharpe)", f"{ms['vol']*100:.2f}%")
+            m_col[2].metric("⚡ Sharpe Ratio", f"{ms['sharpe']:.3f}")
             if price_dict:
                 mdd = estimate_max_drawdown(ms["weights"], price_dict)
-                m_col[3].metric("Max Drawdown stimato", f"{mdd:.2f}%")
+                m_col[3].metric("📉 Max Drawdown stimato", f"{mdd:.2f}%")
 
-        # --- Grafico Frontiera + Monte Carlo ---
-        fig = go.Figure()
-
+        # Grafico Frontiera + Monte Carlo
+        fig_fe = go.Figure()
         mc = result.get("monte_carlo", pd.DataFrame())
         if not mc.empty:
-            fig.add_trace(go.Scatter(
-                x=mc["vol"] * 100,
-                y=mc["ret"] * 100,
-                mode="markers",
-                marker=dict(
-                    color=mc["sharpe"],
-                    colorscale="Viridis",
-                    size=4,
-                    opacity=0.5,
-                    colorbar=dict(title="Sharpe"),
-                ),
-                name="Monte Carlo",
-                hovertemplate="Vol: %{x:.2f}%<br>Ret: %{y:.2f}%<extra></extra>",
+            fig_fe.add_trace(go.Scatter(
+                x=mc["vol"]*100, y=mc["ret"]*100, mode="markers",
+                marker=dict(color=mc["sharpe"], colorscale="Viridis",
+                            size=4, opacity=0.4, colorbar=dict(title="Sharpe")),
+                name="Simulazioni Monte Carlo",
+                hovertemplate="Vol: %{x:.1f}%<br>Rend: %{y:.1f}%<extra></extra>",
             ))
-
         frontier = result.get("frontier_df", pd.DataFrame())
         if not frontier.empty:
-            fig.add_trace(go.Scatter(
-                x=frontier["vol"] * 100,
-                y=frontier["ret"] * 100,
-                mode="lines",
-                line=dict(color=NAVY, width=2),
+            fig_fe.add_trace(go.Scatter(
+                x=frontier["vol"]*100, y=frontier["ret"]*100,
+                mode="lines", line=dict(color=NAVY, width=3),
                 name="Frontiera Efficiente",
             ))
-
-        # Punti ottimali
-        def _add_star(data: dict, name: str, color: str, symbol: str):
-            if data and "error" not in data:
-                fig.add_trace(go.Scatter(
-                    x=[data["vol"] * 100],
-                    y=[data["ret"] * 100],
+        for pdata, pname, pcolor in [
+            (ms, "Max Sharpe ★", "red"),
+            (result.get("min_variance",{}), "Min Varianza ★", "#1A6EBD"),
+            (bl_result or {}, "Black-Litterman ★", "green"),
+        ]:
+            if pdata and "error" not in pdata and "vol" in pdata:
+                fig_fe.add_trace(go.Scatter(
+                    x=[pdata["vol"]*100], y=[pdata["ret"]*100],
                     mode="markers+text",
-                    marker=dict(color=color, size=16, symbol="star"),
-                    text=[name],
-                    textposition="top center",
-                    name=name,
+                    marker=dict(color=pcolor, size=18, symbol="star"),
+                    text=[pname], textposition="top center", name=pname,
                 ))
-
-        _add_star(result.get("max_sharpe"), "Max Sharpe", "red", "star")
-        _add_star(result.get("min_variance"), "Min Varianza", "blue", "star")
-        if bl_result and "error" not in bl_result:
-            _add_star(bl_result, "Black-Litterman", "green", "star")
-
-        fig.update_layout(
-            title="Frontiera Efficiente",
-            xaxis_title="Volatilità (%)",
+        fig_fe.update_layout(
+            title="Frontiera Efficiente — Rischio vs Rendimento",
+            xaxis_title="Volatilità annua (%)",
             yaxis_title="Rendimento atteso (%)",
-            height=500,
-            template="plotly_white",
-            font=dict(family="Inter, sans-serif"),
+            height=520, template="plotly_white",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_fe, use_container_width=True)
 
-        # --- Pesi portafogli ottimali ---
-        tab_ms, tab_mv, tab_bl_t = st.tabs(["Max Sharpe", "Min Varianza", "Black-Litterman"])
+        # Pesi + correlazioni affiancati
+        st.subheader("📋 Composizione portafogli")
+        tab_ms2, tab_mv2, tab_bl2 = st.tabs(["⭐ Max Sharpe", "🛡️ Min Varianza", "🔮 Black-Litterman"])
 
-        def _render_weights_tab(portfolio: dict, label: str):
-            if not portfolio or "error" in portfolio:
+        def _render_weights(pdata: dict, label: str):
+            if not pdata or "error" in pdata:
                 st.info(f"Portafoglio {label} non disponibile.")
                 return
-            w = portfolio["weights"]
-            non_zero = {k: v for k, v in w.items() if v > 0.001}
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                w_df = pd.DataFrame([
-                    {"ISIN": k, "Peso (%)": round(v * 100, 2)}
-                    for k, v in sorted(non_zero.items(), key=lambda x: -x[1])
-                ])
-                st.dataframe(w_df, use_container_width=True, hide_index=True)
-            with col2:
-                pie = px.pie(
-                    values=list(non_zero.values()),
-                    names=list(non_zero.keys()),
-                    hole=0.3,
-                    color_discrete_sequence=px.colors.sequential.Blues_r,
-                )
-                pie.update_layout(height=300, margin=dict(l=0, r=0, t=0, b=0))
+            w = {k: v for k, v in pdata["weights"].items() if v > 0.001}
+            # Arricchisci con nomi
+            w_rows = []
+            for isin, peso in sorted(w.items(), key=lambda x: -x[1]):
+                info = _all_fund_pool.get(isin, {})
+                w_rows.append({
+                    "ISIN": isin,
+                    "Nome": str(info.get("nome", isin))[:55],
+                    "Classificazione": str(info.get("classificazione", info.get("categoria", ""))),
+                    "Peso %": round(peso * 100, 2),
+                    "Perf 3Y %": info.get("perf_3y"),
+                    "Volatilità %": info.get("volatilita"),
+                })
+            w_df = pd.DataFrame(w_rows)
+
+            c1, c2 = st.columns([3, 2])
+            with c1:
+                st.dataframe(w_df, use_container_width=True, hide_index=True,
+                             column_config={
+                                 "Peso %": st.column_config.ProgressColumn(
+                                     "Peso %", min_value=0, max_value=100, format="%.1f%%"),
+                                 "Perf 3Y %": st.column_config.NumberColumn(format="%.2f"),
+                                 "Volatilità %": st.column_config.NumberColumn(format="%.2f"),
+                             })
+            with c2:
+                pie = px.pie(w_df, values="Peso %", names="Nome", hole=0.35,
+                             color_discrete_sequence=px.colors.sequential.Blues_r)
+                pie.update_layout(height=300, margin=dict(l=0, r=0, t=0, b=0),
+                                  showlegend=False)
+                pie.update_traces(textposition="inside",
+                                  textinfo="percent+label",
+                                  textfont_size=10)
                 st.plotly_chart(pie, use_container_width=True)
 
-            # Metriche
             st.markdown(
-                f"**Rendimento atteso:** {portfolio.get('ret', 0)*100:.2f}% &nbsp;|&nbsp; "
-                f"**Volatilità:** {portfolio.get('vol', 0)*100:.2f}% &nbsp;|&nbsp; "
-                f"**Sharpe:** {portfolio.get('sharpe', 0):.3f}"
+                f"**Rendimento atteso:** {pdata.get('ret',0)*100:.2f}% &nbsp;|&nbsp; "
+                f"**Volatilità:** {pdata.get('vol',0)*100:.2f}% &nbsp;|&nbsp; "
+                f"**Sharpe:** {pdata.get('sharpe',0):.3f}"
             )
 
-        with tab_ms:
-            _render_weights_tab(result.get("max_sharpe", {}), "Max Sharpe")
-        with tab_mv:
-            _render_weights_tab(result.get("min_variance", {}), "Min Varianza")
-        with tab_bl_t:
-            _render_weights_tab(bl_result or {}, "Black-Litterman")
+        with tab_ms2: _render_weights(ms, "Max Sharpe")
+        with tab_mv2: _render_weights(result.get("min_variance",{}), "Min Varianza")
+        with tab_bl2: _render_weights(bl_result or {}, "Black-Litterman")
 
-        # --- Correlazioni ---
-        if price_dict:
-            with st.expander("📊 Matrice Correlazioni"):
-                prices_df = pd.DataFrame(price_dict).pct_change().dropna()
-                corr = prices_df.corr()
-                fig_corr = px.imshow(
-                    corr,
-                    color_continuous_scale="RdBu_r",
-                    zmin=-1, zmax=1,
-                    text_auto=".2f",
-                    title="Correlazioni storiche",
-                )
-                fig_corr.update_layout(height=450)
-                st.plotly_chart(fig_corr, use_container_width=True)
+        # Matrice correlazioni — SEMPRE visibile (non in expander)
+        if len(price_dict) >= 2:
+            st.markdown("---")
+            st.subheader("🔗 Matrice Correlazioni")
+            prices_df = pd.DataFrame(price_dict).pct_change().dropna()
+            prices_df.columns = [isin_label.get(c, c) for c in prices_df.columns]
+            corr = prices_df.corr()
+            fig_corr = px.imshow(
+                corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+                text_auto=".2f",
+                title="Correlazioni storiche tra strumenti selezionati",
+            )
+            fig_corr.update_layout(height=max(350, len(corr)*40))
+            st.plotly_chart(fig_corr, use_container_width=True)
+            st.caption("Valori vicini a +1: alta correlazione (si muovono insieme). Vicini a -1: diversificazione efficace.")
 
-        # --- BL dettaglio ---
+        # BL dettaglio
         if bl_result and "error" not in bl_result and "bl_returns" in bl_result:
-            with st.expander("📐 Black-Litterman — Rendimenti Posteriori vs Prior"):
-                bl_rets = bl_result["bl_returns"]
-                mu_prior = result.get("mu", {})
-                compare = pd.DataFrame({
-                    "ISIN": list(bl_rets.keys()),
-                    "Prior (%)": [mu_prior.get(k, 0) * 100 for k in bl_rets],
-                    "Posteriore BL (%)": [v * 100 for v in bl_rets.values()],
-                })
-                fig_bl = go.Figure()
-                fig_bl.add_bar(x=compare["ISIN"], y=compare["Prior (%)"], name="Prior", marker_color="steelblue")
-                fig_bl.add_bar(x=compare["ISIN"], y=compare["Posteriore BL (%)"], name="BL", marker_color="coral")
-                fig_bl.update_layout(barmode="group", height=350)
-                st.plotly_chart(fig_bl, use_container_width=True)
+            st.markdown("---")
+            st.subheader("📐 Black-Litterman — Rendimenti Posteriori vs Prior")
+            bl_rets = bl_result["bl_returns"]
+            mu_prior = result.get("mu", {})
+            bl_compare = pd.DataFrame({
+                "Asset": [isin_label.get(k, k) for k in bl_rets],
+                "Prior (%)": [mu_prior.get(k, 0)*100 for k in bl_rets],
+                "BL Posteriore (%)": [v*100 for v in bl_rets.values()],
+            })
+            fig_bl = go.Figure()
+            fig_bl.add_bar(x=bl_compare["Asset"], y=bl_compare["Prior (%)"],
+                           name="Prior", marker_color="steelblue")
+            fig_bl.add_bar(x=bl_compare["Asset"], y=bl_compare["BL Posteriore (%)"],
+                           name="BL", marker_color="#E8603C")
+            fig_bl.update_layout(barmode="group", height=350,
+                                  yaxis_title="Rendimento atteso (%)")
+            st.plotly_chart(fig_bl, use_container_width=True)
 
-        # --- Export ---
+        # Export
         st.markdown("---")
-        exp_col1, exp_col2 = st.columns(2)
-        ms_data = result.get("max_sharpe", {})
-        if ms_data and "error" not in ms_data:
+        exp_c1, exp_c2 = st.columns(2)
+        if ms and "error" not in ms:
             metrics = {
-                "Rendimento atteso (%)": f"{ms_data.get('ret', 0)*100:.2f}",
-                "Volatilità (%)": f"{ms_data.get('vol', 0)*100:.2f}",
-                "Sharpe Ratio": f"{ms_data.get('sharpe', 0):.3f}",
+                "Rendimento atteso (%)": f"{ms.get('ret',0)*100:.2f}",
+                "Volatilità (%)": f"{ms.get('vol',0)*100:.2f}",
+                "Sharpe Ratio": f"{ms.get('sharpe',0):.3f}",
                 "Generato": datetime.now().strftime("%d/%m/%Y %H:%M"),
             }
             excel_bytes = export_portfolio_excel(
-                ms_data["weights"], metrics,
+                ms["weights"], metrics,
                 fund_df=df_unified if not df_unified.empty else None,
-                price_dict=price_dict,
-                title="Max Sharpe",
+                price_dict=price_dict, title="Max Sharpe",
             )
-            exp_col1.download_button(
-                "📥 Esporta Excel (Max Sharpe)",
-                data=excel_bytes,
+            exp_c1.download_button(
+                "📥 Esporta Excel (Max Sharpe)", data=excel_bytes,
                 file_name=f"portafoglio_max_sharpe_{datetime.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            pdf_bytes = export_portfolio_pdf(ms_data["weights"], metrics, title="Portafoglio Max Sharpe")
+            pdf_bytes = export_portfolio_pdf(ms["weights"], metrics, title="Portafoglio Max Sharpe")
             if pdf_bytes:
-                exp_col2.download_button(
-                    "📄 Esporta PDF (Max Sharpe)",
-                    data=pdf_bytes,
+                exp_c2.download_button(
+                    "📄 Esporta PDF (Max Sharpe)", data=pdf_bytes,
                     file_name=f"portafoglio_max_sharpe_{datetime.now().strftime('%Y%m%d')}.pdf",
                     mime="application/pdf",
                 )
@@ -678,175 +769,200 @@ elif nav == "📈 Frontiera Efficiente":
 # ===========================================================================
 elif nav == "⭐ Portafoglio Qualità":
     st.title("⭐ Portafoglio Qualità")
-    st.markdown("Costruzione per Score Qualità con vincoli di diversificazione.")
+    st.markdown("Selezione automatica dei migliori fondi per Score Qualità, suddivisi per bucket (Azionario, Obbligazionario, Bilanciato…).")
 
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        profilo = st.selectbox(
-            "Profilo di rischio",
-            list(PROFILI.keys()),
-            index=list(PROFILI.keys()).index(st.session_state["profilo"]),
-        )
+    # ── CONFIGURAZIONE ─────────────────────────────────────────────────────
+    cfg_c1, cfg_c2 = st.columns([1, 2])
+    with cfg_c1:
+        profilo = st.selectbox("Profilo di rischio", list(PROFILI.keys()),
+                               index=list(PROFILI.keys()).index(st.session_state["profilo"]))
         st.session_state["profilo"] = profilo
         fondi_per_bucket = st.slider("Fondi per bucket", 2, 8,
                                       st.session_state["fondi_per_bucket"])
         st.session_state["fondi_per_bucket"] = fondi_per_bucket
 
-    with col2:
-        st.markdown(f"**Allocazioni target — {profilo}**")
+    with cfg_c2:
+        st.markdown(f"**Allocazioni target — {profilo}** (modificabili)")
         alloc = PROFILI[profilo].copy()
         alloc_adj = {}
         cols_alloc = st.columns(len(alloc))
         for i, (bucket, pct) in enumerate(alloc.items()):
             alloc_adj[bucket] = cols_alloc[i].number_input(
-                f"{bucket} (%)", 0, 100, pct, 5, key=f"alloc_{bucket}"
-            )
-        total = sum(alloc_adj.values())
-        if total != 100:
-            st.warning(f"Totale allocazioni: {total}% (deve essere 100%)")
+                f"{bucket} (%)", 0, 100, pct, 5, key=f"alloc_{bucket}")
+        total_alloc = sum(alloc_adj.values())
+        if total_alloc != 100:
+            st.warning(f"⚠️ Totale: {total_alloc}% — deve essere 100%")
+        else:
+            st.success(f"✅ Totale: {total_alloc}%")
 
     st.markdown("---")
 
-    # Costruisci portafoglio
-    with st.spinner("Costruzione portafoglio..."):
+    # ── DEBUG BUCKET ────────────────────────────────────────────────────────
+    from utils.constraints import classify_bucket
+    if not df_unified.empty:
+        df_unified["_bucket_preview"] = df_unified["classificazione"].apply(classify_bucket)
+        bucket_dist = df_unified["_bucket_preview"].value_counts()
+        with st.expander("📊 Distribuzione fondi per bucket (verifica classificazione)"):
+            st.dataframe(bucket_dist.reset_index().rename(
+                columns={"_bucket_preview": "Bucket", "count": "N. fondi"}),
+                use_container_width=True, hide_index=True)
+            st.caption("Se Azionario è vuoto → le classificazioni inferite non contengono le parole chiave attese.")
+
+    # ── COSTRUZIONE PORTAFOGLIO ─────────────────────────────────────────────
+    with st.spinner("Costruzione portafoglio per Score Qualità..."):
         portfolio_buckets = build_portfolio_quality(
             df_unified, profilo=profilo, fondi_per_bucket=fondi_per_bucket
         )
 
-    # Lock / replace in sessione
-    locked = st.session_state.get("locked_funds", set())
-
-    # Visualizzazione bucket per bucket
+    # ── VISUALIZZAZIONE BUCKET PER BUCKET ──────────────────────────────────
+    BUCKET_COLORS = {
+        "Azionario":     "#1A2C54",
+        "Obbligazionario": "#2E6DA4",
+        "Bilanciato":    "#5B9BD5",
+        "Monetario":     "#70AD47",
+        "Alternativo":   "#ED7D31",
+    }
     all_porto_rows = []
+
     for bucket, df_bucket in portfolio_buckets.items():
-        st.subheader(f"📂 {bucket} — {alloc_adj.get(bucket, 0)}%")
-        if df_bucket.empty:
-            st.info(f"Nessun fondo trovato per {bucket}.")
+        peso_bucket = alloc_adj.get(bucket, 0)
+        color = BUCKET_COLORS.get(bucket, NAVY)
+        st.markdown(
+            f"<h3 style='color:{color}'>{'▣'} {bucket} — {peso_bucket}%</h3>",
+            unsafe_allow_html=True,
+        )
+        if df_bucket is None or df_bucket.empty:
+            st.warning(
+                f"Nessun fondo trovato per **{bucket}**. "
+                f"Verifica la distribuzione bucket qui sopra o rilassa i vincoli."
+            )
             continue
 
-        # Applica sostituzioni manuali
-        # (semplificato: mostra classifica + bottone lock)
-        cols_show = ["isin", "nome", "classificazione", "perf_1y", "perf_3y",
-                     "volatilita", "rating_fida", "score_qualita", "_peso_fondo"]
+        # Tabella principale con tutti i dettagli
+        cols_show = ["isin", "nome", "classificazione", "casa",
+                     "perf_1y", "perf_3y", "volatilita",
+                     "rating_fida", "score_qualita", "_peso_fondo", "retrocessione"]
         cols_show = [c for c in cols_show if c in df_bucket.columns]
         display = df_bucket[cols_show].copy()
+        # Formattiamo il nome a max 60 char
+        if "nome" in display.columns:
+            display["nome"] = display["nome"].astype(str).str[:60]
 
-        col_config = {
-            "isin": st.column_config.TextColumn("ISIN"),
-            "nome": st.column_config.TextColumn("Fondo"),
-            "classificazione": st.column_config.TextColumn("Classificazione"),
-            "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
-            "perf_3y": st.column_config.NumberColumn("Perf 3Y %", format="%.2f"),
-            "volatilita": st.column_config.NumberColumn("Vol %", format="%.2f"),
-            "rating_fida": st.column_config.NumberColumn("★ FIDA", format="%d"),
-            "score_qualita": st.column_config.NumberColumn("Score", format="%.3f"),
-            "_peso_fondo": st.column_config.NumberColumn("Peso %", format="%.1f"),
-        }
-        st.dataframe(display, column_config=col_config, use_container_width=True, hide_index=True)
+        st.dataframe(display, use_container_width=True, hide_index=True,
+                     column_config={
+                         "isin": st.column_config.TextColumn("ISIN", width="small"),
+                         "nome": st.column_config.TextColumn("Fondo", width="large"),
+                         "classificazione": st.column_config.TextColumn("Classificazione"),
+                         "casa": st.column_config.TextColumn("Casa"),
+                         "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
+                         "perf_3y": st.column_config.NumberColumn("Perf 3Y %", format="%.2f"),
+                         "volatilita": st.column_config.NumberColumn("Vol %", format="%.2f"),
+                         "rating_fida": st.column_config.NumberColumn("★ FIDA", format="%d"),
+                         "score_qualita": st.column_config.ProgressColumn(
+                             "Score", min_value=0, max_value=20, format="%.2f"),
+                         "_peso_fondo": st.column_config.NumberColumn("Peso %", format="%.1f"),
+                         "retrocessione": st.column_config.NumberColumn("Retro %", format="%.2f"),
+                     })
 
-        # Score chart
-        if "score_qualita" in df_bucket.columns and "nome" in df_bucket.columns:
-            fig_score = px.bar(
-                df_bucket.sort_values("score_qualita"),
-                x="score_qualita",
-                y=df_bucket["nome"].str[:30],
+        # Grafico score orizzontale
+        if "score_qualita" in df_bucket.columns and len(df_bucket) > 0:
+            _sc_df = df_bucket.copy()
+            _sc_df["_label"] = _sc_df["nome"].astype(str).str[:35]
+            fig_sc = px.bar(
+                _sc_df.sort_values("score_qualita"),
+                x="score_qualita", y="_label",
                 orientation="h",
                 color="score_qualita",
-                color_continuous_scale="Blues",
+                color_continuous_scale=[[0, "#AED6F1"], [1, color]],
                 title=f"Score Qualità — {bucket}",
+                labels={"_label": "", "score_qualita": "Score"},
             )
-            fig_score.update_layout(height=250, margin=dict(l=0, r=0, t=30, b=0),
-                                     showlegend=False)
-            st.plotly_chart(fig_score, use_container_width=True)
+            fig_sc.update_layout(height=max(200, len(df_bucket)*45),
+                                  margin=dict(l=0, r=0, t=35, b=0),
+                                  showlegend=False, coloraxis_showscale=False)
+            st.plotly_chart(fig_sc, use_container_width=True)
 
         for _, r in df_bucket.iterrows():
             all_porto_rows.append({
-                "Bucket": bucket,
-                "ISIN": r.get("isin", ""),
-                "Fondo": r.get("nome", "")[:50],
-                "Classificazione": r.get("classificazione", ""),
+                "Bucket": bucket, "ISIN": r.get("isin",""),
+                "Fondo": str(r.get("nome",""))[:55],
+                "Classificazione": r.get("classificazione",""),
+                "Casa": r.get("casa",""),
                 "Perf 1Y %": r.get("perf_1y"),
                 "Perf 3Y %": r.get("perf_3y"),
                 "Volatilità %": r.get("volatilita"),
                 "★ FIDA": r.get("rating_fida"),
                 "Score": r.get("score_qualita"),
                 "Peso %": r.get("_peso_fondo"),
-                "Retrocessione %": r.get("retrocessione"),
+                "Retro %": r.get("retrocessione"),
             })
 
-    # Summary portafoglio completo
+    # ── RIEPILOGO PORTAFOGLIO COMPLETO ─────────────────────────────────────
     if all_porto_rows:
         st.markdown("---")
         st.subheader("📋 Portafoglio Completo")
         df_porto = pd.DataFrame(all_porto_rows)
 
-        # Grafico torta macro
-        bucket_weights = df_porto.groupby("Bucket")["Peso %"].sum().reset_index()
-        fig_pie = px.pie(
-            bucket_weights,
-            values="Peso %",
-            names="Bucket",
-            hole=0.35,
-            color_discrete_sequence=[NAVY, "#2E5090", "#4472C4", "#7AB0E0", "#A9CCE3"],
-            title="Allocazione per Macro Asset Class",
-        )
-        fig_pie.update_layout(height=350)
-        col_pie, col_tbl = st.columns([1, 2])
-        col_pie.plotly_chart(fig_pie, use_container_width=True)
-        col_tbl.dataframe(df_porto[["Bucket","Fondo","Peso %","Score","★ FIDA"]],
-                           use_container_width=True, hide_index=True, height=350)
+        pie_c, tbl_c = st.columns([1, 2])
+        with pie_c:
+            bw = df_porto.groupby("Bucket")["Peso %"].sum().reset_index()
+            fig_pie_q = px.pie(bw, values="Peso %", names="Bucket", hole=0.38,
+                               color_discrete_sequence=list(BUCKET_COLORS.values()),
+                               title="Allocazione macro")
+            fig_pie_q.update_layout(height=320, margin=dict(l=0,r=0,t=35,b=0))
+            st.plotly_chart(fig_pie_q, use_container_width=True)
+        with tbl_c:
+            st.dataframe(
+                df_porto[["Bucket","Fondo","Peso %","Score","★ FIDA","Perf 3Y %"]],
+                use_container_width=True, hide_index=True, height=320,
+                column_config={
+                    "Peso %": st.column_config.NumberColumn(format="%.1f"),
+                    "Score": st.column_config.NumberColumn(format="%.2f"),
+                    "Perf 3Y %": st.column_config.NumberColumn(format="%.2f"),
+                }
+            )
 
-        # Heatmap correlazioni (se disponibili serie storiche)
-        with st.expander("📊 Heatmap Correlazioni (serie sintetiche)"):
-            isins = df_porto["ISIN"].tolist()
+        # Heatmap correlazioni
+        with st.expander("📊 Heatmap Correlazioni"):
             asset_list_q = [
-                {"isin": r["ISIN"],
-                 "perf_1y": r.get("Perf 1Y %"), "perf_3y": r.get("Perf 3Y %"),
-                 "perf_2022": None, "perf_2023": None, "perf_2024": None}
+                {"isin": r["ISIN"], "perf_1y": r.get("Perf 1Y %"),
+                 "perf_3y": r.get("Perf 3Y %"), "perf_2022": None,
+                 "perf_2023": None, "perf_2024": None}
                 for _, r in df_porto.iterrows()
             ]
-            with st.spinner("Recupero serie storiche..."):
-                pd_dict = get_multiple_nav(asset_list_q, period="3y")
-            if len(pd_dict) >= 2:
-                prices_q = pd.DataFrame(pd_dict).pct_change().dropna()
-                corr_q = prices_q.corr()
-                fig_corr_q = px.imshow(
-                    corr_q, color_continuous_scale="RdBu_r",
-                    zmin=-1, zmax=1, text_auto=".2f",
-                )
-                fig_corr_q.update_layout(height=400)
-                st.plotly_chart(fig_corr_q, use_container_width=True)
+            with st.spinner("Recupero serie storiche per correlazioni..."):
+                pd_dict_q = get_multiple_nav(asset_list_q, period="3y")
+            if len(pd_dict_q) >= 2:
+                prices_q_df = pd.DataFrame(pd_dict_q).pct_change().dropna()
+                # Label leggibili
+                isin_to_nome = {r["ISIN"]: r["Fondo"][:25] for _, r in df_porto.iterrows()}
+                prices_q_df.columns = [isin_to_nome.get(c, c) for c in prices_q_df.columns]
+                corr_q = prices_q_df.corr()
+                fig_cq = px.imshow(corr_q, color_continuous_scale="RdBu_r",
+                                    zmin=-1, zmax=1, text_auto=".2f")
+                fig_cq.update_layout(height=max(350, len(corr_q)*38))
+                st.plotly_chart(fig_cq, use_container_width=True)
             else:
-                st.info("Dati storici insufficienti per la heatmap.")
+                st.info("Dati storici non sufficienti. Le correlazioni saranno disponibili dopo il fetch NAV.")
 
         # Export
         st.markdown("---")
         exp_c1, exp_c2 = st.columns(2)
         weights_q = {r["ISIN"]: (r["Peso %"] or 0) / 100 for _, r in df_porto.iterrows()}
-        metrics_q = {
-            "Profilo": profilo,
-            "Totale fondi": len(df_porto),
-            "Score medio": f"{df_porto['Score'].mean():.3f}",
-            "Generato": datetime.now().strftime("%d/%m/%Y %H:%M"),
-        }
-        excel_q = export_portfolio_excel(weights_q, metrics_q,
-                                          fund_df=df_unified,
+        metrics_q = {"Profilo": profilo, "Totale fondi": len(df_porto),
+                     "Score medio": f"{df_porto['Score'].mean():.3f}",
+                     "Generato": datetime.now().strftime("%d/%m/%Y %H:%M")}
+        excel_q = export_portfolio_excel(weights_q, metrics_q, fund_df=df_unified,
                                           title=f"Portafoglio Qualità {profilo}")
-        exp_c1.download_button(
-            "📥 Esporta Excel",
-            data=excel_q,
+        exp_c1.download_button("📥 Esporta Excel", data=excel_q,
             file_name=f"portafoglio_qualita_{profilo.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         pdf_q = export_portfolio_pdf(weights_q, metrics_q,
                                       title=f"Portafoglio Qualità — {profilo}")
         if pdf_q:
-            exp_c2.download_button(
-                "📄 Esporta PDF",
-                data=pdf_q,
+            exp_c2.download_button("📄 Esporta PDF", data=pdf_q,
                 file_name=f"portafoglio_qualita_{profilo.lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
-            )
+                mime="application/pdf")
 
 
 # ===========================================================================
