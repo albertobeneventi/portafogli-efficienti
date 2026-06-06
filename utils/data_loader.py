@@ -152,11 +152,76 @@ def _infer_macro_area(testo: str) -> str:
     return "Other"
 
 
+def _fuzzy_col(df: pd.DataFrame, target: str) -> str | None:
+    """
+    Cerca la colonna più simile a `target` nel DataFrame.
+    Strategia: esatto → case-insensitive → partial match.
+    Ritorna il nome della colonna trovata o None.
+    """
+    # Esatto
+    if target in df.columns:
+        return target
+    # Case-insensitive
+    t_lower = target.lower().strip()
+    for col in df.columns:
+        if col.lower().strip() == t_lower:
+            return col
+    # Partial: il target è contenuto nella colonna o viceversa
+    for col in df.columns:
+        cl = col.lower().strip()
+        if t_lower in cl or cl in t_lower:
+            return col
+    # Partial su parole chiave significative (rimuovi parole comuni)
+    stop = {"di", "del", "della", "the", "a", "an", "e", "i", "il", "la", "le", "gli"}
+    t_words = set(t_lower.split()) - stop
+    for col in df.columns:
+        c_words = set(col.lower().strip().split()) - stop
+        if t_words & c_words:
+            return col
+    # Ultima chance: confronto dopo rimozione punteggiatura/apostrofi
+    import re
+    t_clean = re.sub(r"[^a-z0-9\s]", "", t_lower)
+    for col in df.columns:
+        c_clean = re.sub(r"[^a-z0-9\s]", "", col.lower().strip())
+        if t_clean and c_clean and (t_clean in c_clean or c_clean in t_clean):
+            return col
+    return None
+
+
+def _remap_columns(df: pd.DataFrame, col_map: dict) -> dict:
+    """
+    Ritorna dizionario {chiave_logica: nome_colonna_effettivo}.
+    Per ogni colonna attesa prova prima esatto, poi fuzzy.
+    """
+    mapping = {}
+    for key, target in col_map.items():
+        found = _fuzzy_col(df, target)
+        mapping[key] = found  # None se non trovata
+    return mapping
+
+
 def _normalize_perf(df: pd.DataFrame, col_map: dict) -> pd.DataFrame:
     for key in ["perf_1y", "perf_3y", "perf_ytd", "perf_2024", "perf_2023", "perf_2022"]:
         col = col_map.get(key)
         if col and col in df.columns:
             df[col] = df[col].apply(_to_float)
+    return df
+
+
+def _autoscale_perf(df: pd.DataFrame, perf_cols: list[str]) -> pd.DataFrame:
+    """
+    Se le performance sono in formato decimale (es. 0.27 invece di 27%),
+    moltiplica per 100. Criterio: mediana < 5 su almeno metà dei valori non-NaN.
+    """
+    for col in perf_cols:
+        if col not in df.columns:
+            continue
+        vals = pd.to_numeric(df[col], errors="coerce").dropna()
+        if len(vals) == 0:
+            continue
+        # Se il 75° percentile è < 5 e ci sono abbastanza valori → formato decimale
+        if vals.abs().quantile(0.75) < 5 and len(vals) > 10:
+            df[col] = df[col].apply(lambda x: x * 100 if pd.notna(x) and isinstance(x, (int, float)) else x)
     return df
 
 
@@ -167,7 +232,6 @@ def _normalize_perf(df: pd.DataFrame, col_map: dict) -> pd.DataFrame:
 def load_fondi_terzi(path=None) -> pd.DataFrame:
     if path is None:
         path = BASE_DIR / "tabella_fondi_arricchita.xlsx"
-    # accetta sia Path/str che file-like (BytesIO da st.file_uploader)
     import io
     is_filelike = hasattr(path, "read") or isinstance(path, (bytes, io.BytesIO))
     if not is_filelike and not os.path.exists(path):
@@ -175,8 +239,20 @@ def load_fondi_terzi(path=None) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name="tutti quelli trasferibili", dtype=object)
     df.columns = [str(c).strip() for c in df.columns]
     df = _sanitize_df(df)
-    df = _normalize_perf(df, TERZI_COLS)
+
+    # Fuzzy mapping colonne reali
+    fm = _remap_columns(df, TERZI_COLS)
+    # Rinomina le colonne trovate con i nomi standard attesi
+    rename_map = {v: TERZI_COLS[k] for k, v in fm.items() if v and v != TERZI_COLS[k]}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
     c = TERZI_COLS
+    df = _normalize_perf(df, c)
+    # Autoscale perf da decimale a percentuale
+    perf_cols = [c[k] for k in ["perf_1y","perf_3y","perf_ytd","perf_2024","perf_2023","perf_2022"] if c[k] in df.columns]
+    df = _autoscale_perf(df, perf_cols)
+
     for key in ["commissioni", "retrocessione", "volatilita"]:
         col = c.get(key)
         if col and col in df.columns:
@@ -206,8 +282,18 @@ def load_fondi_azimut(path=None) -> pd.DataFrame:
     df = pd.read_excel(path, dtype=object)
     df.columns = [str(c).strip() for c in df.columns]
     df = _sanitize_df(df)
-    df = _normalize_perf(df, AZIMUT_COLS)
+
+    # Fuzzy mapping colonne reali
+    fm = _remap_columns(df, AZIMUT_COLS)
+    rename_map = {v: AZIMUT_COLS[k] for k, v in fm.items() if v and v != AZIMUT_COLS[k]}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
     c = AZIMUT_COLS
+    df = _normalize_perf(df, c)
+    perf_cols = [c[k] for k in ["perf_1y","perf_3y","perf_ytd","perf_2024","perf_2023","perf_2022"] if c[k] in df.columns]
+    df = _autoscale_perf(df, perf_cols)
+
     if c["ongoing_charges"] in df.columns:
         df[c["ongoing_charges"]] = df[c["ongoing_charges"]].apply(_to_float)
     for key in ["stelle_fida", "stelle_ms"]:

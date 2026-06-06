@@ -290,10 +290,15 @@ if nav == "🏠 Home":
                 st.markdown("**Distribuzione rating_fida:**")
                 st.write(df_unified["rating_fida"].value_counts(dropna=False))
                 from utils.scoring import is_generalista
+                from utils.data_loader import _remap_columns, TERZI_COLS
                 n_gen = df_unified["classificazione"].apply(is_generalista).sum()
                 st.write(f"Fondi con classificazione generalista: **{n_gen}**")
                 n_perf = df_unified["perf_3y"].notna().sum()
                 st.write(f"Fondi con perf_3y disponibile: **{n_perf}**")
+                st.markdown("**Sample classificazione (10 valori):**")
+                st.write(df_unified["classificazione"].dropna().head(10).tolist())
+                st.markdown("**Sample perf_3y (10 valori):**")
+                st.write(df_unified["perf_3y"].dropna().head(10).tolist())
 
     st.markdown("---")
     st.subheader("Liste Preselezionate")
