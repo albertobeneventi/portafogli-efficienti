@@ -821,17 +821,40 @@ elif nav == "📈 Frontiera Efficiente":
         )
 
         # ── Sorgente dati ─────────────────────────────────────────────────
-        use_funds = st.checkbox(
+        _opt_c1, _opt_c2, _opt_c3 = st.columns(3)
+        use_funds = _opt_c1.checkbox(
             "Includi fondi (Liste A/B) oltre agli ETF",
-            value=True,
-            key="ac_use_funds",
+            value=True, key="ac_use_funds",
             help="Se attivo usa i fondi per Score Qualità; se disattivo usa solo ETF Lista C",
         )
-        prefer_funds = st.checkbox(
+        prefer_funds = _opt_c2.checkbox(
             "Preferisci fondi agli ETF (se disponibili)",
-            value=True,
-            key="ac_prefer_funds",
+            value=True, key="ac_prefer_funds",
             disabled=not use_funds,
+        )
+
+        # Fondi Azimut disponibili
+        _ac_az_pool = []
+        if not df_unified.empty and "_source" in df_unified.columns:
+            from utils.scoring import compute_scores_df as _css
+            _az_df2 = df_unified[df_unified["_source"] == "azimut"].copy()
+            if not _az_df2.empty:
+                _az_df2 = _css(_az_df2)
+                _az_df2 = _az_df2.sort_values("score_qualita", ascending=False)
+                _ac_az_pool = _az_df2["isin"].dropna().tolist()
+        _n_az_avail = len(_ac_az_pool)
+
+        n_min_az_ac = _opt_c3.number_input(
+            f"Di cui min fondi Azimut ({_n_az_avail} disponibili)",
+            min_value=0,
+            max_value=max(_n_az_avail, 1),
+            value=0, step=1,
+            key="ac_n_min_az",
+            help=(
+                "Garantisce almeno N fondi Azimut nel portafoglio auto-composto. "
+                "Vengono selezionati i migliori per Score Qualità."
+            ),
+            disabled=_n_az_avail == 0 or not use_funds,
         )
 
         # ── Sliders allocazione ───────────────────────────────────────────
@@ -958,29 +981,58 @@ elif nav == "📈 Frontiera Efficiente":
             labels = [macro] * len(selected)
             return selected, labels
 
+        # ── Funzione di inserimento fondi Azimut garantiti ────────────────
+        def _inject_azimut(selected: list, n_min: int, macro: str) -> list:
+            """Garantisce almeno n_min fondi Azimut nella lista selected."""
+            if n_min <= 0 or not _ac_az_pool:
+                return selected
+            _az_already = [i for i in selected if i in _ac_az_pool]
+            _need = n_min - len(_az_already)
+            if _need <= 0:
+                return selected
+            _result = list(selected)
+            for _az_i in _ac_az_pool:
+                if _need <= 0:
+                    break
+                if _az_i not in _result:
+                    _result.append(_az_i)
+                    _need -= 1
+            return _result
+
         # ── Preview anteprima prima di confermare ──────────────────────────
         if total_ac == 100:
             _prev_az, _ = _pick_assets("Azioni", int(n_az), use_funds, prefer_funds)
+            _prev_az = _inject_azimut(_prev_az, int(n_min_az_ac), "Azioni")
             _prev_ob, _ = _pick_assets("Obbligazioni", int(n_ob), use_funds, prefer_funds)
             _prev_mp, _ = _pick_assets("Materie Prime", int(n_mp), use_funds, prefer_funds)
             _all_prev = _prev_az + _prev_ob + _prev_mp
 
             if _all_prev:
                 st.markdown("**Anteprima selezione:**")
+                _etf_isins_set = {e["isin"] for e in _ETF_STATIC_LIST}
                 _prev_rows = []
                 for _isin in _all_prev:
                     _info = _all_fund_pool.get(_isin, {})
+                    # Lookup in df_unified se info mancante
+                    if not _info and not df_unified.empty:
+                        _r = df_unified[df_unified["isin"] == _isin]
+                        if not _r.empty:
+                            _info = _r.iloc[0].to_dict()
+                            _pool_add(_isin, _info)
                     _nome = str(_info.get("nome", _isin))[:55]
-                    _tipo = "ETF" if _isin in {e["isin"] for e in _ETF_STATIC_LIST} else "Fondo"
+                    _fonte = ("Azimut" if _info.get("_source") == "azimut"
+                              else "ETF" if _isin in _etf_isins_set else "Terzi")
                     _macro_lbl = ("Azioni" if _isin in _prev_az
                                   else "Obbligazioni" if _isin in _prev_ob
                                   else "Materie Prime")
                     _prev_rows.append({
                         "Asset Class": _macro_lbl,
-                        "Tipo": _tipo,
+                        "Fonte": _fonte,
                         "ISIN": _isin,
                         "Nome": _nome,
-                        "Score": round(_info.get("score_qualita", 0) or 0, 2),
+                        "Score": round(float(_info.get("score_qualita", 0) or 0), 2),
+                        "Perf 3Y %": _info.get("perf_3y"),
+                        "★ FIDA": _info.get("rating_fida"),
                     })
                 st.dataframe(
                     pd.DataFrame(_prev_rows),
@@ -988,23 +1040,35 @@ elif nav == "📈 Frontiera Efficiente":
                     column_config={
                         "Score": st.column_config.ProgressColumn(
                             "Score Qualità", min_value=0, max_value=20, format="%.2f"),
+                        "Perf 3Y %": st.column_config.NumberColumn(format="%.1f"),
+                        "★ FIDA": st.column_config.NumberColumn(format="%d"),
+                        "Fonte": st.column_config.TextColumn("Fonte", width="small"),
                     },
-                    height=min(400, len(_prev_rows) * 38 + 40),
+                    height=min(450, len(_prev_rows) * 38 + 45),
                 )
+                # Riepilogo fondi Azimut nell'anteprima
+                _n_az_prev = sum(1 for r in _prev_rows if r["Fonte"] == "Azimut")
+                if _n_az_prev > 0:
+                    st.caption(f"🔵 {_n_az_prev} fondi Azimut inclusi nell'anteprima")
 
         if st.button("🎯 Aggiungi alla selezione e ottimizza",
                      key="auto_compose", type="primary",
                      disabled=(total_ac != 100)):
             az_list, az_lbl = _pick_assets("Azioni", int(n_az), use_funds, prefer_funds)
+            az_list = _inject_azimut(az_list, int(n_min_az_ac), "Azioni")
             ob_list, ob_lbl = _pick_assets("Obbligazioni", int(n_ob), use_funds, prefer_funds)
             mp_list, mp_lbl = _pick_assets("Materie Prime", int(n_mp), use_funds, prefer_funds)
 
             auto_isins = list(dict.fromkeys(az_list + ob_list + mp_list))
 
-            # Aggiungi info nel pool per gli ISIN non ancora presenti
+            # Arricchisci pool per tutti gli ISIN aggiunti
             for _isin in auto_isins:
-                if _isin not in _all_fund_pool:
-                    _pool_add(_isin, {"isin": _isin, "nome": _isin, "classificazione": ""})
+                if _isin not in _all_fund_pool and not df_unified.empty:
+                    _r = df_unified[df_unified["isin"] == _isin]
+                    if not _r.empty:
+                        _pool_add(_isin, _r.iloc[0].to_dict())
+                    else:
+                        _pool_add(_isin, {"isin": _isin, "nome": _isin, "classificazione": ""})
 
             st.session_state["fe_selected_isins"] = list(dict.fromkeys(
                 st.session_state["fe_selected_isins"] + auto_isins
