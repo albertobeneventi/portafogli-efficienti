@@ -795,12 +795,12 @@ elif nav == "📈 Frontiera Efficiente":
 
         # Step 1: Allocazione
         st.markdown("**1 \u2014 Allocazione target (%)**")
-        _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+        _ac1, _ac2, _ac3 = st.columns(3)
         _pct_az = _ac1.number_input("Azioni %",        0, 100, _prev.get("pct_az", 60), 5)
         _pct_ob = _ac2.number_input("Obbligazioni %",  0, 100, _prev.get("pct_ob", 30), 5)
-        _pct_bi = _ac3.number_input("Bilanciato %",    0, 100, _prev.get("pct_bi",  0), 5)
-        _pct_mp = _ac4.number_input("Materie Prime %", 0, 100, _prev.get("pct_mp", 10), 5)
-        _total_pct = int(_pct_az) + int(_pct_ob) + int(_pct_bi) + int(_pct_mp)
+        _pct_mp = _ac3.number_input("Materie Prime %", 0, 100, _prev.get("pct_mp", 10), 5)
+        _pct_bi = 0   # rimosso: i bilanciati rientrano nell'allocazione obbligazionaria
+        _total_pct = int(_pct_az) + int(_pct_ob) + int(_pct_mp)
         _tc, _ = st.columns([1, 3])
         if _total_pct == 100:
             _tc.success(f"Totale: {_total_pct}%  OK")
@@ -811,13 +811,12 @@ elif nav == "📈 Frontiera Efficiente":
 
         # Step 2: Strumenti
         st.markdown("**2 \u2014 Strumenti**")
-        _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+        _sc1, _sc2, _sc3 = st.columns(3)
         _n_az_str = _sc1.number_input("Strumenti azionari",       2, 12, _prev.get("n_az_str", 4), 1)
         _n_ob_str = _sc2.number_input("Strumenti obbligazionari", 2, 12, _prev.get("n_ob_str", 4), 1)
-        _n_bi_str = _sc3.number_input("Strumenti bilanciati",     0,  8, _prev.get("n_bi_str", 0), 1,
-                                       disabled=(int(_pct_bi)==0))
-        _n_mp_str = _sc4.number_input("Strumenti Mat. Prime",     0,  6, _prev.get("n_mp_str", 2), 1,
+        _n_mp_str = _sc3.number_input("Strumenti Mat. Prime",     0,  6, _prev.get("n_mp_str", 2), 1,
                                        disabled=(int(_pct_mp)==0))
+        _n_bi_str = 0   # bilanciato rimosso
         _sf1, _sf2, _sf3 = st.columns(3)
         _az_label = f"Min fondi Azimut  ({_n_az_avail} disponibili)" if _n_az_avail else "Min fondi Azimut"
         _n_min_az = _sf1.number_input(_az_label, 0, max(_n_az_avail, 20),
@@ -905,10 +904,8 @@ elif nav == "📈 Frontiera Efficiente":
 
     if _submitted and _total_pct == 100:
         st.session_state["_fe_form_vals"] = {
-            "pct_az": int(_pct_az), "pct_ob": int(_pct_ob),
-            "pct_bi": int(_pct_bi), "pct_mp": int(_pct_mp),
-            "n_az_str": int(_n_az_str), "n_ob_str": int(_n_ob_str),
-            "n_bi_str": int(_n_bi_str), "n_mp_str": int(_n_mp_str),
+            "pct_az": int(_pct_az), "pct_ob": int(_pct_ob), "pct_mp": int(_pct_mp),
+            "n_az_str": int(_n_az_str), "n_ob_str": int(_n_ob_str), "n_mp_str": int(_n_mp_str),
             "n_min_az": int(_n_min_az),
             "use_fondi": bool(_use_fondi), "use_azioni": bool(_use_azioni),
             "min_w_pct": int(_min_w_pct), "max_w_pct": int(_max_w_pct),
@@ -921,7 +918,7 @@ elif nav == "📈 Frontiera Efficiente":
         with st.spinner("Selezione strumenti..."):
             _az_sel = _pick_assets("Azioni",        int(_n_az_str), _use_fondi, _use_fondi) if int(_pct_az)>0 else []
             _ob_sel = _pick_assets("Obbligazioni",  int(_n_ob_str), _use_fondi, _use_fondi) if int(_pct_ob)>0 else []
-            _bi_sel = _pick_assets("Bilanciato",    int(_n_bi_str), _use_fondi, _use_fondi) if (int(_pct_bi)>0 and int(_n_bi_str)>0) else []
+            _bi_sel = []   # bilanciato non più campo separato
             _mp_sel = _pick_assets("Materie Prime", int(_n_mp_str), False, False)            if (int(_pct_mp)>0 and int(_n_mp_str)>0) else []
             if _use_azioni:
                 _it = [i for i in ITALIAN_STOCKS if not i.startswith("IT_BTP")][:4]
@@ -939,7 +936,7 @@ elif nav == "📈 Frontiera Efficiente":
         st.session_state["fe_ac_target"] = {
             k: v/100 for k, v in [
                 ("Azioni", int(_pct_az)), ("Obbligazioni", int(_pct_ob)),
-                ("Bilanciato", int(_pct_bi)), ("Materie Prime", int(_pct_mp)),
+                ("Materie Prime", int(_pct_mp)),
             ] if v > 0
         }
         sel_isins          = _all_sel
