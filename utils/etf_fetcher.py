@@ -310,6 +310,82 @@ def fetch_etf_universe(
     return df
 
 
+def _build_from_yfinance_and_static(extra_isins=None) -> pd.DataFrame:
+    """
+    Costruisce Lista C combinando:
+    - Dataset statico (nomi, categorie, TER verificati)
+    - yfinance per rendimenti storici reali tramite ticker map
+    """
+    from .etf_static import ETF_STATIC
+    from .etf_tickers import ISIN_TO_TICKER, TER_VERIFIED
+
+    try:
+        import yfinance as yf
+    except ImportError:
+        from .etf_static import get_static_etf_df
+        return get_static_etf_df()
+
+    static_map = {e["isin"]: e for e in ETF_STATIC}
+    all_isins = list(dict.fromkeys(HARDCODED_ISINS + (extra_isins or [])))
+
+    records = []
+    tickers_to_fetch = []
+    isin_by_ticker = {}
+
+    for isin in all_isins:
+        ticker = ISIN_TO_TICKER.get(isin)
+        if ticker:
+            tickers_to_fetch.append(ticker)
+            isin_by_ticker[ticker] = isin
+
+    # Fetch batch yfinance (1 chiamata per tutti i ticker)
+    yf_data = {}
+    if tickers_to_fetch:
+        try:
+            tickers_str = " ".join(tickers_to_fetch)
+            hist = yf.download(tickers_str, period="5y", interval="1mo",
+                               auto_adjust=True, progress=False, threads=True)
+            close = hist["Close"] if "Close" in hist.columns else hist
+            # Calcola rendimenti annuali da serie mensile
+            for ticker in tickers_to_fetch:
+                if ticker in close.columns:
+                    s = close[ticker].dropna()
+                    if len(s) >= 12:
+                        p1y = (s.iloc[-1] / s.iloc[-13] - 1) * 100 if len(s) >= 13 else None
+                        p3y = (s.iloc[-1] / s.iloc[-37] - 1) * 100 / 3 if len(s) >= 37 else None
+                        p5y = (s.iloc[-1] / s.iloc[-61] - 1) * 100 / 5 if len(s) >= 61 else None
+                        yf_data[ticker] = {"perf_1y": round(p1y, 2) if p1y else None,
+                                           "perf_3y": round(p3y, 2) if p3y else None,
+                                           "perf_5y": round(p5y, 2) if p5y else None}
+        except Exception:
+            pass  # fallback silenzioso
+
+    for isin in all_isins:
+        base = static_map.get(isin, {})
+        ticker = ISIN_TO_TICKER.get(isin, "")
+        yf_perf = yf_data.get(ticker, {})
+        records.append({
+            "isin": isin,
+            "nome": base.get("nome", isin),
+            "categoria": base.get("categoria", CATEGORY_MAP.get(isin, "ETF")),
+            "ter": TER_VERIFIED.get(isin, base.get("ter")),
+            "aum_mln": base.get("aum_mln"),
+            "ticker": ticker,
+            "perf_1y": yf_perf.get("perf_1y"),
+            "perf_3y": yf_perf.get("perf_3y"),
+            "perf_5y": yf_perf.get("perf_5y"),
+            "_fonte_ter": "KID verificato" if isin in TER_VERIFIED else "stima",
+            "_fonte_perf": "yfinance" if yf_perf else "n/d",
+            "timestamp": datetime.now().isoformat(),
+        })
+
+    df = pd.DataFrame(records)
+    df["_lista"] = "C"
+    DATA_DIR.mkdir(exist_ok=True)
+    df.to_excel(ETF_UNIVERSE_FILE, index=False)
+    return df
+
+
 def load_etf_universe(extra_isins: list[str] | None = None) -> pd.DataFrame:
     """
     Carica etf_universe.xlsx se esiste e valido (< 24h),
@@ -326,14 +402,10 @@ def load_etf_universe(extra_isins: list[str] | None = None) -> pd.DataFrame:
                 pass
     try:
         df = fetch_etf_universe(extra_isins=extra_isins)
-        # Se tutti i nomi sono ISIN (scraping fallito), usa dataset statico
+        # Se tutti i nomi sono ISIN (scraping fallito), usa yfinance
         isin_as_nome = (df["nome"] == df["isin"]).sum()
         if isin_as_nome > len(df) * 0.5:
-            raise ValueError("JustETF scraping non riuscito — uso dataset statico")
+            raise ValueError("JustETF non raggiungibile")
         return df
     except Exception:
-        from .etf_static import get_static_etf_df
-        df = get_static_etf_df()
-        DATA_DIR.mkdir(exist_ok=True)
-        df.to_excel(ETF_UNIVERSE_FILE, index=False)
-        return df
+        return _build_from_yfinance_and_static(extra_isins)

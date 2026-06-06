@@ -1021,17 +1021,33 @@ elif nav == "🌐 ETF Universe":
 
         col3.metric("ETF visualizzati", len(df_display))
 
-        cols_etf = [c for c in ["isin", "nome", "categoria", "ter", "aum_mln", "perf_1y", "perf_3y", "perf_5y"]
+        # Legenda fonti dati
+        with st.expander("ℹ️ Fonti dati ETF"):
+            st.markdown("""
+| Campo | Fonte | Note |
+|-------|-------|------|
+| **Nome / Categoria** | Dataset statico hardcoded | Verificato manualmente su emittente |
+| **TER %** | KID/KIID ufficiali emittente | Aggiornamento giugno 2025 |
+| **Perf 1Y/3Y/5Y %** | **yfinance** (prezzi reali) | Calcolata da serie storica mensile su Borsa Milano/Xetra |
+| **AUM mln €** | Stima indicativa | Non verificato — usare per ordinamento relativo |
+| **Ticker** | Mappa ISIN→ticker hardcoded | 85/85 ETF coperti |
+""")
+
+        cols_etf = [c for c in ["isin", "ticker", "nome", "categoria", "ter",
+                                 "perf_1y", "perf_3y", "perf_5y",
+                                 "_fonte_perf", "_fonte_ter"]
                     if c in df_display.columns]
         col_config_etf = {
-            "isin": st.column_config.TextColumn("ISIN"),
+            "isin": st.column_config.TextColumn("ISIN", width="small"),
+            "ticker": st.column_config.TextColumn("Ticker", width="small"),
             "nome": st.column_config.TextColumn("Nome", width="large"),
             "categoria": st.column_config.TextColumn("Categoria"),
             "ter": st.column_config.NumberColumn("TER %", format="%.2f"),
-            "aum_mln": st.column_config.NumberColumn("AUM (mln €)", format="%.0f"),
             "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
-            "perf_3y": st.column_config.NumberColumn("Perf 3Y %", format="%.2f"),
-            "perf_5y": st.column_config.NumberColumn("Perf 5Y %", format="%.2f"),
+            "perf_3y": st.column_config.NumberColumn("Perf 3Y %/ann", format="%.2f"),
+            "perf_5y": st.column_config.NumberColumn("Perf 5Y %/ann", format="%.2f"),
+            "_fonte_perf": st.column_config.TextColumn("Fonte perf.", width="small"),
+            "_fonte_ter": st.column_config.TextColumn("Fonte TER", width="small"),
         }
         st.dataframe(df_display[cols_etf], column_config=col_config_etf,
                      use_container_width=True, height=500)
