@@ -349,6 +349,7 @@ with st.sidebar:
             "⭐ Portafoglio Qualità",
             "🔀 Comparatore",
             "🌐 ETF Universe",
+            "📖 Guida",
             "⚙️ Impostazioni",
         ],
         label_visibility="collapsed",
@@ -2237,6 +2238,383 @@ elif nav == "🌐 ETF Universe":
             with st.expander("⚠️ Log errori JustETF"):
                 errors = ETF_ERRORS_LOG.read_text(encoding="utf-8")
                 st.code(errors[-2000:] if len(errors) > 2000 else errors)
+
+
+# ===========================================================================
+# GUIDA
+# ===========================================================================
+elif nav == "📖 Guida":
+    st.title("📖 Guida — Come funziona l'app")
+    st.markdown(
+        "Questa pagina spiega le **regole che governano l'app**, "
+        "come vengono costruiti i portafogli e cosa significano i termini tecnici."
+    )
+
+    # ── TAB PRINCIPALI ──────────────────────────────────────────────────────
+    g1, g2, g3, g4, g5 = st.tabs([
+        "📋 Le Liste e i Dati",
+        "⭐ Score Qualità & Portafoglio Qualità",
+        "📈 Frontiera Efficiente",
+        "🔮 Black-Litterman",
+        "📐 Regole di Diversificazione",
+    ])
+
+    # ── TAB 1: LE LISTE ─────────────────────────────────────────────────────
+    with g1:
+        st.subheader("Le sorgenti dati")
+        st.markdown("""
+L'app lavora su **tre categorie** di strumenti, ognuna con una fonte diversa:
+
+| Lista | Contenuto | Fonte |
+|-------|-----------|-------|
+| **Lista A — Generalisti** | Fondi terzi + Azimut con classificazione globale/bilanciata/flessibile | File Excel caricato in sidebar |
+| **Lista B — Tematici** | Fondi specializzati (emergenti, settoriali, tematici, high yield…) | File Excel caricato in sidebar |
+| **Lista C — ETF** | 85 ETF/ETC/ETN selezionati + titoli italiani + dividend stocks | Dataset statico + yfinance per rendimenti |
+""")
+
+        with st.expander("Come viene costruita Lista A (100 fondi generalisti)"):
+            st.markdown("""
+**Criteri di eleggibilità:**
+- Classificazione FIDA contiene almeno una keyword: *Globali, Globale, Bilanciati, Flessibili, Ritorno Assoluto, Multi-Asset, Allocation, Azionari Globali, Obbligazionari Globali*
+- Performance 3Y disponibile e non nulla
+- Rating FIDA ≥ 3 stelle (se disponibile) — i fondi senza rating passano comunque
+- Performance 3Y annualizzata ≥ 0%
+
+**Vincoli di selezione (top 100):**
+- Max **3 fondi** per casa di gestione
+- Max **2 fondi** per sottoclassificazione FIDA
+- Max **1 fondo** con la stessa "radice strategia" (prime 3 parole significative del nome — evita ACC e MINC della stessa strategia)
+- Ordinamento: **Score Qualità** decrescente (vedi tab successivo)
+- Tiebreaker a parità di score: vince il fondo con **retrocessione più alta**
+""")
+
+        with st.expander("Come viene costruita Lista B (100 fondi tematici)"):
+            st.markdown("""
+**Criteri di eleggibilità:**
+- Classificazione FIDA **non** contiene le keyword generaliste (esclusi da Lista A)
+- Include: Frontier Markets, Emergenti specifici, Settoriali (Tech, Healthcare, Biotech), Tematici (ESG, Robotica, Acqua), High Yield, CoCo/AT1, Convertibili, ABS, Sukuk, ecc.
+- Performance 1Y disponibile
+
+**Vincoli:**
+- Max **2 fondi** per casa di gestione
+- Max **1 fondo** per sotto-tema specifico
+""")
+
+        with st.expander("Lista C — ETF e come vengono aggiornati i prezzi"):
+            st.markdown("""
+**Composizione:**
+85 ETF/ETC/ETN selezionati manualmente, organizzati per categoria:
+Azioni Mondo, Azioni USA, Azioni Europa, Azioni Emergenti, Obbligazioni Governativi EUR,
+Obbligazioni Societari, High Yield, Obbligazioni Emergenti, iBonds, BTP/Italia, Materie Prime.
+
+**Più:** 35 titoli FTSE MIB italiani e 30 dividend stocks internazionali (TDIV/EUDV).
+
+**TER:** verificato da KID/KIID ufficiali dell'emittente (giugno 2025).
+
+**Rendimenti:** scaricati in tempo reale da **Yahoo Finance** tramite una mappa ISIN→ticker
+verificata (es. `IE00B4L5Y983` → `SWDA.MI`). Copertura: 78/85 ETF.
+
+**Aggiornamento:** automaticamente ogni 24 ore al primo caricamento; manualmente con
+il pulsante "🔄 Aggiorna rendimenti" nella pagina ETF Universe.
+""")
+
+        with st.expander("Fonti dati per le serie storiche (ottimizzazione)"):
+            st.markdown("""
+Per calcolare la **frontiera efficiente** servono serie storiche di prezzi/NAV.
+L'app le recupera con questa cascata:
+
+1. **Cache locale** (24h) — evita chiamate ripetute
+2. **Morningstar API** — per i fondi con ISIN noto (usa cloudscraper per aggirare bot-detection)
+3. **FondiDoc.it** — fallback per i fondi italiani
+4. **Yahoo Finance** — per ETF (via ticker map) e azioni quotate (ticker diretto)
+5. **Serie sintetica** — costruita dai rendimenti annuali disponibili (2022, 2023, 2024, YTD),
+   interpolando mensilmente. Meno precisa ma funziona sempre.
+
+> ⚠️ Le serie sintetiche producono risultati meno affidabili nell'ottimizzazione
+> rispetto alle serie reali. Preferire ETF (yfinance) quando possibile.
+""")
+
+    # ── TAB 2: SCORE QUALITÀ ────────────────────────────────────────────────
+    with g2:
+        st.subheader("Score Qualità — la formula")
+        st.markdown("""
+Lo **Score Qualità** è il punteggio che l'app usa per classificare i fondi e costruire
+il Portafoglio Qualità. È un indicatore sintetico che combina rendimento, efficienza
+e consistenza.
+""")
+
+        st.code("""
+# FORMULA SCORE QUALITÀ
+base_score = (perf_3y_ann × 0.50)           # 50%: rendimento triennale annualizzato
+           + (perf_3y_ann / volatilità × 0.30)  # 30%: efficienza (Sharpe proxy)
+           + (perf_1y × 0.20)               # 20%: rendimento ultimo anno
+
+# Moltiplicatore stelle FIDA
+fida_mult = { 5★: 1.30,  4★: 1.15,  3★: 1.00,  2★: 0.90,  1★: 0.80,  n/d: 1.00 }
+score = base_score × fida_mult
+
+# Penalità rendimento triennale negativo
+if perf_3y_ann < 0:  score × 0.50
+
+# Penalità anni molto negativi (< -10%)
+bad_years = numero anni (2022, 2023, 2024) con perf < -10%
+consistency_bonus = max(0.40,  1.0 - bad_years × 0.15)
+score × consistency_bonus
+
+# Tiebreaker a parità di score (±5%): vince il fondo con retrocessione più alta
+""", language="python")
+
+        st.markdown("""
+**Interpretazione:**
+- Score **> 10**: fondo eccellente, ottimo rapporto rendimento/rischio
+- Score **5–10**: buono, nella media alta
+- Score **0–5**: nella media
+- Score **negativo**: rendimento triennale negativo (il moltiplicatore 0.5 abbatte lo score)
+""")
+
+        st.subheader("Portafoglio Qualità — come funziona")
+        st.markdown("""
+Il Portafoglio Qualità **non** usa l'ottimizzazione quantitativa. Seleziona i fondi
+migliori per **Score Qualità** rispettando vincoli di diversificazione.
+
+**Flusso:**
+
+1. Scegli il **profilo di rischio** → definisce le % target per macro asset class
+
+| Profilo | Obbligazioni | Bilanciato | Azionario | Monetario | Alternativo |
+|---------|-------------|-----------|-----------|-----------|-------------|
+| Conservativo | 60% | 15% | 10% | 15% | — |
+| Equilibrato | 40% | 25% | 30% | — | 5% |
+| Accrescitivo | 25% | 15% | 55% | — | 5% |
+| Dinamico | 15% | — | 75% | — | 10% |
+
+2. Per ogni **bucket** (Azionario, Obbligazionario, Bilanciato…) l'app:
+   - Filtra i fondi per classificazione FIDA
+   - Ordina per Score Qualità decrescente
+   - Applica vincoli di diversificazione → seleziona i top N fondi
+
+3. Il peso di ogni fondo = peso del bucket ÷ numero di fondi nel bucket
+""")
+
+        with st.expander("Vincoli di diversificazione nel Portafoglio Qualità"):
+            st.markdown("""
+Per ogni bucket:
+- Max **1 fondo** per casa di gestione
+- Max **1 fondo** per sottoclassificazione FIDA
+- Max **1 fondo** con la stessa radice strategia (prime 3 parole significative del nome)
+- Max **2 fondi** dalla stessa macro-area geografica (US, Europe, Emerging, Japan, Asia, Global, Italy)
+- Almeno **1 fondo** con "Global/Globale/Internazionale" nella classificazione per ogni bucket
+""")
+
+    # ── TAB 3: FRONTIERA EFFICIENTE ─────────────────────────────────────────
+    with g3:
+        st.subheader("Cos'è la Frontiera Efficiente")
+        st.markdown("""
+La **Frontiera Efficiente** è il concetto centrale della Teoria Moderna del Portafoglio
+(Markowitz, 1952). È la curva che mostra tutti i portafogli che offrono il **massimo
+rendimento per ogni dato livello di rischio** (o il minimo rischio per ogni dato rendimento).
+
+Qualsiasi portafoglio che si trova **al di sotto** della curva è sub-ottimale:
+esiste un portafoglio sulla frontiera che offre lo stesso rendimento con meno rischio,
+o più rendimento con lo stesso rischio.
+""")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+**Come la costruisce l'app:**
+1. Recupera serie storiche per tutti gli asset selezionati
+2. Calcola rendimenti attesi (media storica annualizzata)
+3. Calcola matrice di covarianza con **Ledoit-Wolf shrinkage** (più stabile della covarianza campionaria)
+4. Ottimizza con **PyPortfolioOpt** su 50 punti da Min Varianza a Max Rendimento
+5. Genera 5.000 portafogli casuali (Monte Carlo) per visualizzare lo spazio possibile
+""")
+        with col2:
+            st.info("""
+**Limitazione importante:**
+I rendimenti attesi sono basati su dati **storici** (3 anni di default).
+I rendimenti passati non sono predittivi di quelli futuri.
+
+La frontiera è utile per capire le **relazioni di rischio/rendimento**
+tra gli asset, non per fare previsioni precise.
+""")
+
+        st.markdown("---")
+        st.subheader("⭐ Max Sharpe")
+        st.markdown("""
+Il **portafoglio Max Sharpe** massimizza l'**Indice di Sharpe**:
+
+$$\\text{Sharpe} = \\frac{\\text{Rendimento atteso} - \\text{Risk-free rate}}{\\text{Volatilità}}$$
+
+È il portafoglio che offre il **miglior rapporto tra rendimento in eccesso e rischio**.
+Se il risk-free rate è 2.5% e un portafoglio rende 12% con 8% di volatilità:
+Sharpe = (12 - 2.5) / 8 = **1.19**
+
+**Quando usarlo:** quando vuoi massimizzare il rendimento per unità di rischio.
+Tipicamente adatto a profili Equilibrato/Accrescitivo.
+
+> Sul grafico: **stella rossa 🔴**
+""")
+
+        st.subheader("🛡️ Min Varianza")
+        st.markdown("""
+Il **portafoglio Min Varianza** (o Minimum Variance Portfolio) minimizza la
+**volatilità del portafoglio**, indipendentemente dal rendimento.
+
+Sfrutta la **correlazione tra asset**: combinando asset con correlazione bassa o negativa
+si ottiene un portafoglio complessivo meno volatile della media dei suoi componenti.
+
+**Quando usarlo:** quando la priorità è la stabilità del valore. Adatto a profili
+Conservativo/Equilibrato, o quando si è vicini a una necessità di liquidare.
+
+> Sul grafico: **diamante blu 🔵** — è sempre il punto più a sinistra della frontiera
+""")
+
+        with st.expander("Come impostare i vincoli nell'ottimizzazione"):
+            st.markdown("""
+**Peso minimo (default 3%):** evita posizioni troppo piccole (transaction costs).
+**Peso massimo (default 30%):** impone diversificazione, evita concentrazione eccessiva.
+
+**Forza inclusione:** inserisce un asset con peso minimo garantito (utile per BTP/ETF specifici).
+**Min fondi Azimut:** garantisce la presenza di almeno N fondi Azimut nel portafoglio finale.
+
+**Vincoli asset class:** attivati dall'Auto-composizione — il portafoglio deve rispettare
+le % target per macro classe (±10% di tolleranza).
+""")
+
+        with st.expander("Paraametri configurabili (sidebar)"):
+            st.markdown("""
+| Parametro | Default | Significato |
+|-----------|---------|-------------|
+| **Risk-free rate** | 2.5% | Tasso privo di rischio usato nel calcolo dello Sharpe |
+| **Periodo ottimizzazione** | 3Y | Finestra storica per calcolo rendimenti e covarianza |
+| **Peso minimo** | 3% | Peso minimo per ogni asset nel portafoglio |
+| **Peso massimo** | 30% | Peso massimo per ogni asset nel portafoglio |
+""")
+
+    # ── TAB 4: BLACK-LITTERMAN ──────────────────────────────────────────────
+    with g4:
+        st.subheader("Black-Litterman — Intuizione")
+        st.markdown("""
+Il modello **Black-Litterman** (Fischer Black e Robert Litterman, Goldman Sachs 1990)
+risolve un problema pratico del modello di Markowitz: i rendimenti attesi storici
+sono **molto instabili** e producono portafogli concentrati e poco intuitivi.
+
+**L'idea:** invece di partire solo dai dati storici, si parte dai **pesi di mercato**
+(capitalizzazione — quanto il mercato stesso "pensa" che valga ogni asset) e poi
+si integrano le **view soggettive** del gestore con una confidenza esplicita.
+""")
+
+        col1b, col2b = st.columns(2)
+        with col1b:
+            st.markdown("""
+**Come funziona in pratica:**
+
+1. **Prior (equilibrio):** i pesi di mercato implicano rendimenti attesi di equilibrio
+2. **View:** inserisci la tua aspettativa su uno o più asset
+   - Es: *"Mi aspetto che gli Emergenti rendano 10% l'anno"*
+   - Con confidenza 0.7 (abbastanza sicuro)
+3. **Posterior:** BL combina prior e view → nuovi rendimenti attesi "bayesiani"
+4. **Ottimizzazione:** Max Sharpe sui rendimenti posteriori
+""")
+        with col2b:
+            st.info("""
+**Quando ha senso usarlo:**
+- Hai una tesi specifica su un settore o area geografica
+- Vuoi "inclinare" il portafoglio verso una view senza abbandonare la diversificazione
+- Es: sovrappeso azionario emergente perché credi alla ripresa cinese
+
+**Quando NON usarlo:**
+- Non hai view specifiche → usa Max Sharpe
+- Le tue view sono già riflesse nel prezzo → il mercato sa già
+""")
+
+        st.markdown("""
+**Confidenza:** valore da 0.1 a 1.0.
+- **1.0** = certezza assoluta sulla view → il portafoglio si avvicina molto alla tua aspettativa
+- **0.5** = view moderata → BL bilancia 50/50 tra prior di mercato e tua view
+- **0.1** = view molto incerta → il portafoglio rimane vicino all'equilibrio di mercato
+
+> Sul grafico: **pentagono verde 🟢** — appare solo se BL è abilitato con almeno una view
+""")
+
+    # ── TAB 5: REGOLE DIVERSIFICAZIONE ─────────────────────────────────────
+    with g5:
+        st.subheader("Le regole che ci siamo dati")
+        st.markdown("""
+Queste regole sono state definite esplicitamente per garantire portafogli
+**professionalmente diversificati** e non influenzati da bias di selezione.
+""")
+
+        with st.expander("📋 Regole Liste A/B (preselection)"):
+            st.markdown("""
+**Lista A — Generalisti:**
+- Eleggibilità: classificazione FIDA generalista + perf 3Y disponibile + rating ≥ 3★ (o n/d) + perf 3Y ≥ 0%
+- **Max 3 fondi** per casa di gestione
+- **Max 2 fondi** per sottoclassificazione FIDA
+- **Max 1 fondo** per "radice strategia" (prime 3 parole significative del nome, escludendo share class come ACC/MINC)
+- Copertura obbligatoria di almeno 5 macro-aree: Azionario globale, Obbligazionario globale, Bilanciato, Ritorno assoluto, Flessibile
+
+**Lista B — Tematici:**
+- **Max 2 fondi** per casa di gestione
+- **Max 1 fondo** per sotto-tema specifico
+""")
+
+        with st.expander("⭐ Regole Portafoglio Qualità"):
+            st.markdown("""
+Per ogni bucket dell'allocazione target:
+
+- **Max 1 fondo per casa di gestione** — nessun "doppio" della stessa asset manager
+- **Max 1 fondo per sottoclassificazione FIDA** — diversificazione tra stili
+- **Max 1 fondo per radice strategia** — evita che ACC e MINC della stessa strategia finiscano insieme
+- **Max 2 fondi dalla stessa macro-area geografica** — tra US, Europe, Emerging, Japan, Asia, Global, Italy
+- **Tiebreaker:** a parità di score (±5%), vince il fondo con retrocessione più alta
+
+Puoi **bloccare** un fondo (rimane nel portafoglio indipendentemente dallo score) e
+**sostituire** manualmente un fondo con un alternativo dalla classifica completa del bucket.
+""")
+
+        with st.expander("📈 Regole Frontiera Efficiente"):
+            st.markdown("""
+- **Minimo 3 asset, massimo 30** per avere una frontiera significativa
+- **Matrice di covarianza:** Ledoit-Wolf shrinkage (riduce l'instabilità della covarianza campionaria)
+- **Rendimenti attesi:** media storica annualizzata (frequenza mensile × 12)
+- **Monte Carlo:** 5.000 portafogli casuali per visualizzare lo spazio delle possibilità
+- **Frontiera:** 50 punti da Min Varianza a Max Rendimento
+- **Vincoli settoriali (Auto-composizione):** ±10% di tolleranza sul target di asset class
+""")
+
+        with st.expander("🔮 Regole Black-Litterman"):
+            st.markdown("""
+- **Prior:** pesi uguali tra gli asset (in assenza di capitalizzazione di mercato per i fondi)
+  o pesi di mercato per gli ETF azionari
+- **Tau** (parametro di incertezza sul prior): 0.05 (default PyPortfolioOpt)
+- **Omega** (matrice di incertezza delle view): proporzionale alla varianza dell'asset
+- Le view sono **assolute** (rendimento atteso diretto), non relative
+- Confidenza > 0.8 → la view domina; < 0.3 → il prior domina
+""")
+
+        with st.expander("📊 Classificazione automatica degli strumenti"):
+            st.markdown("""
+Quando la colonna "Classificazione FIDA" del file Excel è vuota, l'app **inferisce
+la classificazione dal nome del fondo** usando regole keyword:
+
+| Parole chiave nel nome | Classificazione inferita |
+|------------------------|--------------------------|
+| equity, azionari, stock, dividend, growth fund | Azionari |
+| emerging market, frontier market | Azionari Emergenti |
+| technology, healthcare, biotech, innovation | Azionari Tematici |
+| bond, obbligazionari, fixed income, high yield | Obbligazionari |
+| government bond, sovereign | Obbligazionari Governativi |
+| money market, monetario, overnight | Monetario |
+| balanced, bilanciati, multi-asset, patrimoine | Bilanciati |
+| flexible, flessibili, dynamic allocation | Flessibili |
+| absolute return, ritorno assoluto, market neutral | Ritorno Assoluto |
+| commodity, materie prime, gold, oil | Materie Prime |
+
+L'ordine è importante: *Obbligazionari* viene cercato PRIMA di *Azionari* per evitare
+che "obbligazionari" (che contiene "azionari") venga classificato erroneamente.
+""")
 
 
 # ===========================================================================
