@@ -761,71 +761,125 @@ elif nav == "📈 Frontiera Efficiente":
                 selected = etf_candidates[:n]
         return selected
 
-    def _inject_azimut(selected: list, n_min: int) -> tuple:
+    def _inject_azimut(selected: list, n_min: int,
+                       az_sel: list | None = None,
+                       ob_sel: list | None = None) -> tuple:
+        """
+        Inietta min n_min fondi Azimut nella selezione.
+        Legge df_azimut direttamente, calcola score, seleziona i migliori
+        proporzionalmente ai bucket richiesti (Azioni / Obbligazioni).
+        """
         if n_min <= 0:
             return selected, []
-        from utils.data_loader import AZIMUT_COLS as _ACOLS
-
-        # Costruisce lista ISIN Azimut ranked: prima via cache, poi df_azimut diretto
-        _az_ranked = []
-        if not df_azimut.empty:
-            try:
-                _az_ranked = _get_azimut_ranked(df_azimut.to_json(orient="records"))
-            except Exception:
-                pass
-        if not _az_ranked and not df_unified.empty and "_source" in df_unified.columns:
-            _az_ranked = df_unified[df_unified["_source"] == "azimut"]["isin"].dropna().tolist()
-        if not _az_ranked and not df_azimut.empty:
-            # Fallback diretto: lista grezza senza ordinamento per score
-            _isin_col = _ACOLS.get("isin", "ISIN")
-            if _isin_col in df_azimut.columns:
-                _az_ranked = df_azimut[_isin_col].dropna().tolist()
-
-        if not _az_ranked:
+        if df_azimut.empty:
             return selected, []
 
-        _az_set     = set(_az_ranked)
-        _az_already = [i for i in selected if i in _az_set]
+        from utils.data_loader import AZIMUT_COLS as _ACOLS
+        from utils.scoring import compute_score as _cscore
+
+        _c_isin = _ACOLS.get("isin", "ISIN")
+        _c_nome = _ACOLS.get("nome", "FONDO AZIMUT")
+        _c_cl   = _ACOLS.get("classificazione", "CLASSIFICAZIONE FIDA")
+        _c_p3   = _ACOLS.get("perf_3y", "PERF 3Y")
+        _c_p1   = _ACOLS.get("perf_1y", "PERF 1Y")
+        _c_fida = _ACOLS.get("stelle_fida", "STELLE FIDA")
+
+        if _c_isin not in df_azimut.columns:
+            return selected, []
+
+        # ── Costruisce pool Azimut con score ──────────────────────────────
+        _az_pool = []
+        for _, _r in df_azimut.iterrows():
+            _isin_r = str(_r.get(_c_isin, "") or "").strip()
+            if not _isin_r or len(_isin_r) < 8:
+                continue
+            try:
+                _p3  = float(_r.get(_c_p3, 0) or 0)
+                _p1  = float(_r.get(_c_p1, 0) or 0)
+                _fida = _r.get(_c_fida)
+                _sc  = _cscore(_p3, _p1, volatility=0.0, fida_stars=_fida)
+            except Exception:
+                _sc = 0.0
+            _cl = str(_r.get(_c_cl, "") or "")
+            _macro = _macro_from_class(_cl) or "Altro"
+            _az_pool.append({
+                "isin": _isin_r,
+                "nome": str(_r.get(_c_nome, _isin_r)),
+                "casa": "Azimut",
+                "classificazione": _cl,
+                "perf_3y": float(_r.get(_c_p3, 0) or 0),
+                "perf_1y": float(_r.get(_c_p1, 0) or 0),
+                "volatilita": None,
+                "rating_fida": _fida,
+                "score_qualita": _sc,
+                "_source": "azimut",
+                "_macro": _macro,
+            })
+
+        if not _az_pool:
+            return selected, []
+
+        # Ordina per score
+        _az_pool.sort(key=lambda x: x["score_qualita"], reverse=True)
+
+        # ── Conta quanti Azimut già presenti in selected ───────────────────
+        _sel_set   = set(selected)
+        _az_isins  = {d["isin"] for d in _az_pool}
+        _az_already = [i for i in selected if i in _az_isins]
         _need       = n_min - len(_az_already)
-        _result     = list(selected)
-        _forced     = list(_az_already[:n_min])
 
-        for _az_i in _az_ranked:
-            if _need <= 0:
+        _result = list(selected)
+        _forced = list(_az_already[:n_min])
+
+        if _need <= 0:
+            # Già abbastanza Azimut; aggiorna solo pool
+            for _entry in _az_pool:
+                if _entry["isin"] in _sel_set:
+                    _pool_add(_entry["isin"], _entry)
+            return _result, _forced
+
+        # ── Seleziona nuovi Azimut per macro-bucket ────────────────────────
+        # Proporzione: usa la distribuzione dei bucket richiesti
+        _n_az_bucket = len(az_sel or [])
+        _n_ob_bucket = len(ob_sel or [])
+        _tot_req     = max(_n_az_bucket + _n_ob_bucket, 1)
+        # Quanti Azimut "azioni" vs "obbligazioni" aggiungere
+        _n_az_to_add = round(_need * _n_az_bucket / _tot_req)
+        _n_ob_to_add = _need - _n_az_to_add
+
+        _added = 0
+        for _bucket, _quota in [("Azioni", _n_az_to_add), ("Obbligazioni", _n_ob_to_add)]:
+            _q = _quota
+            for _entry in _az_pool:
+                if _q <= 0:
+                    break
+                if _entry["isin"] in _result:
+                    continue
+                if _entry["_macro"] == _bucket:
+                    _result.append(_entry["isin"])
+                    _forced.append(_entry["isin"])
+                    _pool_add(_entry["isin"], _entry)
+                    _q -= 1
+                    _added += 1
+
+        # Se non abbastanza per bucket specifico, prendi i migliori rimasti
+        _still_need = _need - _added
+        for _entry in _az_pool:
+            if _still_need <= 0:
                 break
-            if _az_i not in _result:
-                _result.append(_az_i)
-                _forced.append(_az_i)
-                _need -= 1
+            if _entry["isin"] not in _result:
+                _result.append(_entry["isin"])
+                _forced.append(_entry["isin"])
+                _pool_add(_entry["isin"], _entry)
+                _still_need -= 1
 
-        # Assicura che ogni fondo Azimut iniettato sia nel pool con info complete
-        _az_isin_col = _ACOLS.get("isin", "ISIN")
+        # Assicura pool per tutti gli Azimut iniettati
         for _isin in _forced:
             if _isin not in _all_fund_pool:
-                # Prima cerca in df_unified (già normalizzato)
-                if not df_unified.empty:
-                    _rw = df_unified[df_unified["isin"] == _isin]
-                    if not _rw.empty:
-                        _pool_add(_isin, _rw.iloc[0].to_dict())
-                        continue
-                # Poi cerca in df_azimut raw (ha _source="azimut")
-                if not df_azimut.empty and _az_isin_col in df_azimut.columns:
-                    _rw_az = df_azimut[df_azimut[_az_isin_col] == _isin]
-                    if not _rw_az.empty:
-                        _r = _rw_az.iloc[0]
-                        _pool_add(_isin, {
-                            "isin":             _isin,
-                            "nome":             str(_r.get(_ACOLS.get("nome","FONDO AZIMUT"), _isin)),
-                            "casa":             "Azimut",
-                            "classificazione":  str(_r.get(_ACOLS.get("classificazione","CLASSIFICAZIONE FIDA"), "")),
-                            "perf_1y":          _r.get(_ACOLS.get("perf_1y","PERF 1Y")),
-                            "perf_3y":          _r.get(_ACOLS.get("perf_3y","PERF 3Y")),
-                            "volatilita":       None,
-                            "rating_fida":      _r.get(_ACOLS.get("stelle_fida","STELLE FIDA")),
-                            "_source":          "azimut",
-                        })
-            elif _all_fund_pool[_isin].get("_source") != "azimut":
-                # Pool esiste ma senza _source: aggiorna
+                _rw = df_unified[df_unified["isin"] == _isin] if not df_unified.empty else pd.DataFrame()
+                if not _rw.empty:
+                    _pool_add(_isin, _rw.iloc[0].to_dict())
+            if _isin in _all_fund_pool:
                 _all_fund_pool[_isin]["_source"] = "azimut"
                 _all_fund_pool[_isin]["casa"] = "Azimut"
 
@@ -985,7 +1039,9 @@ elif nav == "📈 Frontiera Efficiente":
                 _it = [i for i in ITALIAN_STOCKS if not i.startswith("IT_BTP")][:4]
                 _az_sel = list(dict.fromkeys(_az_sel + _it))
             _all_sel = list(dict.fromkeys(_az_sel + _ob_sel + _bi_sel + _mp_sel))
-            _all_sel, _az_forced = _inject_azimut(_all_sel, int(_n_min_az))
+            _all_sel, _az_forced = _inject_azimut(
+                _all_sel, int(_n_min_az), az_sel=_az_sel, ob_sel=_ob_sel
+            )
 
         st.session_state["fe_selected_isins"] = _all_sel
         st.session_state["fe_ac_map"] = (

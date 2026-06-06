@@ -52,6 +52,7 @@ AZIMUT_COLS = {
     "perf_2023": "PERF 2023",
     "perf_2022": "PERF 2022",
     "ongoing_charges": "ONGOING CHARGES",
+    "volatilita": "VOLATILITA'",   # colonna volatilità se presente nel file Azimut
 }
 
 KEYWORD_GENERALISTE = [
@@ -428,7 +429,7 @@ def build_unified_fund_df(df_terzi: pd.DataFrame, df_azimut: pd.DataFrame) -> pd
             "perf_2024": r.get(c["perf_2024"], np.nan),
             "perf_2023": r.get(c["perf_2023"], np.nan),
             "perf_2022": r.get(c["perf_2022"], np.nan),
-            "volatilita": np.nan,
+            "volatilita": r.get(c.get("volatilita", "VOLATILITA'"), np.nan),
             "rating_fida": r.get(c["stelle_fida"], None),
             "rating_ms": r.get(c["stelle_ms"], None),
             "acc_distr": r.get(c["acc_dis"], ""),

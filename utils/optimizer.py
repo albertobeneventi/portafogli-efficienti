@@ -321,7 +321,42 @@ def compute_efficient_frontier(
             "sharpe":  float(ms_perf[2]),
         }
     except Exception as e:
-        max_sharpe = {"error": str(e)}
+        _e_str = str(e).lower()
+        if "risk-free" in _e_str or "expected return" in _e_str:
+            # Tutti i fondi hanno μ ≤ rfr (es. solo obbligazionari a basso rendimento)
+            # Fallback: usa rfr=0 (massimizza Sharpe grezzo) oppure min_variance
+            try:
+                ef_fb = EfficientFrontier(mu, cov, weight_bounds=w_bounds_list)
+                _apply_sector(ef_fb)
+                ef_fb.max_sharpe(risk_free_rate=0.0)
+                ms_weights = ef_fb.clean_weights()
+                ms_perf    = ef_fb.portfolio_performance(risk_free_rate=risk_free_rate)
+                max_sharpe = {
+                    "weights": ms_weights,
+                    "ret":     float(ms_perf[0]),
+                    "vol":     float(ms_perf[1]),
+                    "sharpe":  float(ms_perf[2]),
+                    "_note":   "rfr=0 (rendimenti tutti sotto tasso risk-free)",
+                }
+            except Exception as e2:
+                # Ultimo fallback: min variance
+                try:
+                    ef_fb2 = EfficientFrontier(mu, cov, weight_bounds=w_bounds_list)
+                    _apply_sector(ef_fb2)
+                    ef_fb2.min_volatility()
+                    ms_weights = ef_fb2.clean_weights()
+                    ms_perf    = ef_fb2.portfolio_performance(risk_free_rate=risk_free_rate)
+                    max_sharpe = {
+                        "weights": ms_weights,
+                        "ret":     float(ms_perf[0]),
+                        "vol":     float(ms_perf[1]),
+                        "sharpe":  float(ms_perf[2]),
+                        "_note":   "min-variance (fallback)",
+                    }
+                except Exception as e3:
+                    max_sharpe = {"error": str(e3)}
+        else:
+            max_sharpe = {"error": str(e)}
 
     # ── Min Variance ──────────────────────────────────────────────────────
     try:
