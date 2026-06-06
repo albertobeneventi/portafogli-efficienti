@@ -992,12 +992,11 @@ elif nav == "📈 Frontiera Efficiente":
             ("Materie Prime", ["materie prime", "commodity", "commodities",
                                "energy", "metals", "agriculture", "oro", "gold",
                                "petrolio", "oil", "gas"]),
-            # Obbligazioni prima di Azioni (evita match "azionari" ⊂ "obbligazionari")
+            # Obbligazioni — escluso monetario (gestito separatamente)
             ("Obbligazioni",  ["obbligazionari", "obbligazionario", "bond",
                                "fixed income", "reddito fisso", "high yield",
                                "corporate bond", "government bond", "duration",
-                               "inflation linked", "monetario", "monetari",
-                               "money market", "liquidit"]),
+                               "inflation linked"]),
             # Azioni per ultima
             ("Azioni",        ["azionari", "azionario", "equity", "azioni", "stock",
                                "tematici", "tematico", "growth fund",
@@ -1024,7 +1023,14 @@ elif nav == "📈 Frontiera Efficiente":
             selected = []
             labels   = []
 
-            # ── FONDI da df_unified (Liste A/B) ──────────────────────────
+            # ── Keyword per identificare i monetari (da escludere sempre) ─
+            _MONETARY_KW = ["money market", "monetari", "monetario", "cash",
+                            "insticash", "overnight", "liquidit", "lvnav", "vnav"]
+            def _is_monetary(cl: str, nome: str) -> bool:
+                t = (str(cl) + " " + str(nome)).lower()
+                return any(k in t for k in _MONETARY_KW)
+
+            # ── FONDI da df_unified ──────────────────────────────────────
             fund_candidates = []
             if use_f and not df_unified.empty:
                 from utils.scoring import compute_scores_df
@@ -1032,7 +1038,18 @@ elif nav == "📈 Frontiera Efficiente":
                 _fu = compute_scores_df(_fu)
                 _fu["_macro_auto"] = _fu["classificazione"].apply(_macro_from_class)
                 _fu = _fu[_fu["_macro_auto"] == macro].copy()
+                # Escludi sempre i monetari (vol~0, score distorto)
+                _fu = _fu[~_fu.apply(
+                    lambda r: _is_monetary(r.get("classificazione",""), r.get("nome","")), axis=1
+                )]
                 _fu = _fu.sort_values("score_qualita", ascending=False)
+                # Aggiorna pool con score calcolato
+                for _, _r in _fu.iterrows():
+                    _isin_r = str(_r.get("isin",""))
+                    if _isin_r and _isin_r in _all_fund_pool:
+                        _all_fund_pool[_isin_r]["score_qualita"] = _r.get("score_qualita", 0)
+                    elif _isin_r:
+                        _pool_add(_isin_r, _r.to_dict())
                 # Diversificazione: max 1 per casa
                 _seen_casa: set = set()
                 for _, r in _fu.iterrows():

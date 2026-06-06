@@ -27,7 +27,9 @@ def compute_score(
     # Gestione valori mancanti
     p3 = perf_3y_ann if not (pd.isna(perf_3y_ann) or perf_3y_ann is None) else 0.0
     p1 = perf_1y if not (pd.isna(perf_1y) or perf_1y is None) else 0.0
-    vol = volatility if not (pd.isna(volatility) or volatility is None or volatility == 0) else 10.0
+    # Floor di volatilità a 0.5% — evita divisione per zero nei monetari (score ∞)
+    raw_vol = volatility if not (pd.isna(volatility) or volatility is None) else 0.0
+    vol = max(float(raw_vol), 0.5)
 
     sharpe_proxy = p3 / vol
 
