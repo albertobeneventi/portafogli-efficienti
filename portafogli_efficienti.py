@@ -760,30 +760,26 @@ elif nav == "📈 Frontiera Efficiente":
     with st.expander("🎯 Auto-composizione per Asset Class", expanded=False):
         st.markdown(
             "Indica la % target per macro asset class. "
-            "L'app selezionerà automaticamente gli ETF più rappresentativi e ottimizzerà "
-            "i pesi mantenendo l'allocazione richiesta."
+            "L'app selezionerà i **migliori fondi per Score Qualità** (Liste A/B) "
+            "e/o gli **ETF rappresentativi** (Lista C), poi ottimizzerà i pesi "
+            "rispettando l'allocazione richiesta."
         )
-        # ETF rappresentativi per asset class (ISIN verificati in Lista C)
-        _AC_ETF = {
-            "Azioni Globali":      ["IE00B4L5Y983", "IE00BK5BQT80", "IE00B3RBWM25"],
-            "Azioni USA":          ["IE00B5BMR087", "IE00BFMXXD54", "IE00B53SZB19"],
-            "Azioni Europa":       ["LU0908500753", "IE00B4K48X80", "IE00B53L3W79"],
-            "Azioni Emergenti":    ["IE00BKM4GZ66", "IE00BTJRMP35"],
-            "Obbligazioni EUR Gov":["IE00B4WXJJ64", "IE00BH04GL39", "IE00B3VTMJ91"],
-            "Obbligazioni EUR Corp":["IE00B3F81R35","IE00BF11F565", "IE00B4L60045"],
-            "Obbligazioni HY":     ["IE00B66F4759", "LU1109943388"],
-            "Obbligazioni EM":     ["IE00B2NPKV68", "IE00B5M4WH52"],
-            "BTP/Italia":          ["IE00B3T9LM79", "IE00B99470V8"],
-            "Materie Prime":       ["IE00BD6FTQ80", "LU1829218749"],
-        }
-        # Mappa macro-bucket → lista sottoclassi
-        _MACRO_TO_AC = {
-            "Azioni":         ["Azioni Globali", "Azioni USA", "Azioni Europa", "Azioni Emergenti"],
-            "Obbligazioni":   ["Obbligazioni EUR Gov", "Obbligazioni EUR Corp",
-                               "Obbligazioni HY", "Obbligazioni EM", "BTP/Italia"],
-            "Materie Prime":  ["Materie Prime"],
-        }
 
+        # ── Sorgente dati ─────────────────────────────────────────────────
+        use_funds = st.checkbox(
+            "Includi fondi (Liste A/B) oltre agli ETF",
+            value=True,
+            key="ac_use_funds",
+            help="Se attivo usa i fondi per Score Qualità; se disattivo usa solo ETF Lista C",
+        )
+        prefer_funds = st.checkbox(
+            "Preferisci fondi agli ETF (se disponibili)",
+            value=True,
+            key="ac_prefer_funds",
+            disabled=not use_funds,
+        )
+
+        # ── Sliders allocazione ───────────────────────────────────────────
         ac1, ac2, ac3 = st.columns(3)
         pct_az  = ac1.slider("Azioni %",         0, 100, 60, 5, key="ac_az")
         pct_ob  = ac2.slider("Obbligazioni %",    0, 100, 30, 5, key="ac_ob")
@@ -794,28 +790,167 @@ elif nav == "📈 Frontiera Efficiente":
         else:
             st.success(f"✅ {pct_az}% Azioni + {pct_ob}% Obbligazioni + {pct_mp}% Materie Prime")
 
-        # Quante sottoclassi per macro-bucket
-        n_az = ac1.number_input("N. ETF azionari", 2, 6, 3, key="n_az")
-        n_ob = ac2.number_input("N. ETF obbligazionari", 2, 6, 3, key="n_ob")
-        n_mp = ac3.number_input("N. ETF commodity", 1, 3, 1, key="n_mp")
+        n_az = ac1.number_input("N. strumenti azionari",      2, 8, 4, key="n_az")
+        n_ob = ac2.number_input("N. strumenti obbligazionari", 2, 8, 4, key="n_ob")
+        n_mp = ac3.number_input("N. strumenti commodity",      1, 4, 2, key="n_mp")
 
-        if st.button("🎯 Componi e seleziona automaticamente",
+        # ── Logica di selezione ───────────────────────────────────────────
+        # ETF fallback per asset class
+        _ETF_FALLBACK = {
+            "Azioni": [
+                "IE00B4L5Y983",  # MSCI World
+                "IE00BK5BQT80",  # FTSE All-World
+                "IE00B5BMR087",  # S&P 500
+                "LU0908500753",  # Stoxx 600
+                "IE00BKM4GZ66",  # EM IMI
+            ],
+            "Obbligazioni": [
+                "IE00B4WXJJ64",  # Euro Govt
+                "IE00B3F81R35",  # EUR Corp
+                "IE00B66F4759",  # EUR HY
+                "IE00B2NPKV68",  # EM Bond
+                "IE00B3T9LM79",  # BTP
+            ],
+            "Materie Prime": [
+                "IE00BD6FTQ80",  # Bloomberg Commodity
+                "LU1829218749",  # Commodity ex-Agri
+                "GB00B15KXQ89",  # Copper
+                "GB00B15KXV33",  # WTI Oil
+            ],
+        }
+
+        # Mappa classificazione → macro-bucket con word-boundary (evita "azionari" in "obbligazionari")
+        import re as _re
+        _CLASS_TO_MACRO_ORDERED = [
+            # Materie Prime prima (termini univoci)
+            ("Materie Prime", ["materie prime", "commodity", "commodities",
+                               "energy", "metals", "agriculture", "oro", "gold",
+                               "petrolio", "oil", "gas"]),
+            # Obbligazioni prima di Azioni (evita match "azionari" ⊂ "obbligazionari")
+            ("Obbligazioni",  ["obbligazionari", "obbligazionario", "bond",
+                               "fixed income", "reddito fisso", "high yield",
+                               "corporate bond", "government bond", "duration",
+                               "inflation linked", "monetario", "monetari",
+                               "money market", "liquidit"]),
+            # Azioni per ultima
+            ("Azioni",        ["azionari", "azionario", "equity", "azioni", "stock",
+                               "tematici", "tematico", "growth fund",
+                               "small cap", "large cap", "dividend"]),
+        ]
+
+        def _macro_from_class(classificazione: str) -> str | None:
+            cl = str(classificazione).lower()
+            for macro, keywords in _CLASS_TO_MACRO_ORDERED:
+                for kw in keywords:
+                    # Word-boundary: il keyword non deve essere parte di un'altra parola
+                    pattern = r"(?<![a-z])" + _re.escape(kw) + r"(?![a-z])"
+                    if _re.search(pattern, cl):
+                        return macro
+            return None
+
+        def _pick_assets(macro: str, n: int,
+                          use_f: bool, prefer_f: bool) -> tuple[list, list]:
+            """
+            Ritorna (lista_isins, lista_macro_label) con i migliori N strumenti
+            per il macro-bucket richiesto.
+            Prima tenta con i fondi (se use_f), poi completa con ETF fallback.
+            """
+            selected = []
+            labels   = []
+
+            # ── FONDI da df_unified (Liste A/B) ──────────────────────────
+            fund_candidates = []
+            if use_f and not df_unified.empty:
+                from utils.scoring import compute_scores_df
+                _fu = df_unified.copy()
+                _fu = compute_scores_df(_fu)
+                _fu["_macro_auto"] = _fu["classificazione"].apply(_macro_from_class)
+                _fu = _fu[_fu["_macro_auto"] == macro].copy()
+                _fu = _fu.sort_values("score_qualita", ascending=False)
+                # Diversificazione: max 1 per casa
+                _seen_casa: set = set()
+                for _, r in _fu.iterrows():
+                    casa = str(r.get("casa", ""))
+                    if casa and casa in _seen_casa:
+                        continue
+                    fund_candidates.append(r["isin"])
+                    if casa:
+                        _seen_casa.add(casa)
+                    if len(fund_candidates) >= n * 3:
+                        break
+
+            # ── ETF fallback ──────────────────────────────────────────────
+            etf_candidates = _ETF_FALLBACK.get(macro, [])
+
+            if prefer_f and fund_candidates:
+                # Priorità ai fondi, completa con ETF se non bastano
+                selected = fund_candidates[:n]
+                if len(selected) < n:
+                    for e in etf_candidates:
+                        if e not in selected and len(selected) < n:
+                            selected.append(e)
+            elif fund_candidates and not prefer_f:
+                # Misto: metà fondi, metà ETF
+                half = n // 2
+                selected = fund_candidates[:half]
+                for e in etf_candidates:
+                    if e not in selected and len(selected) < n:
+                        selected.append(e)
+            else:
+                # Solo ETF
+                selected = etf_candidates[:n]
+
+            labels = [macro] * len(selected)
+            return selected, labels
+
+        # ── Preview anteprima prima di confermare ──────────────────────────
+        if total_ac == 100:
+            _prev_az, _ = _pick_assets("Azioni", int(n_az), use_funds, prefer_funds)
+            _prev_ob, _ = _pick_assets("Obbligazioni", int(n_ob), use_funds, prefer_funds)
+            _prev_mp, _ = _pick_assets("Materie Prime", int(n_mp), use_funds, prefer_funds)
+            _all_prev = _prev_az + _prev_ob + _prev_mp
+
+            if _all_prev:
+                st.markdown("**Anteprima selezione:**")
+                _prev_rows = []
+                for _isin in _all_prev:
+                    _info = _all_fund_pool.get(_isin, {})
+                    _nome = str(_info.get("nome", _isin))[:55]
+                    _tipo = "ETF" if _isin in {e["isin"] for e in _ETF_STATIC_LIST} else "Fondo"
+                    _macro_lbl = ("Azioni" if _isin in _prev_az
+                                  else "Obbligazioni" if _isin in _prev_ob
+                                  else "Materie Prime")
+                    _prev_rows.append({
+                        "Asset Class": _macro_lbl,
+                        "Tipo": _tipo,
+                        "ISIN": _isin,
+                        "Nome": _nome,
+                        "Score": round(_info.get("score_qualita", 0) or 0, 2),
+                    })
+                st.dataframe(
+                    pd.DataFrame(_prev_rows),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "Score": st.column_config.ProgressColumn(
+                            "Score Qualità", min_value=0, max_value=20, format="%.2f"),
+                    },
+                    height=min(400, len(_prev_rows) * 38 + 40),
+                )
+
+        if st.button("🎯 Aggiungi alla selezione e ottimizza",
                      key="auto_compose", type="primary",
                      disabled=(total_ac != 100)):
-            auto_isins = []
-            # Seleziona ETF per ogni bucket proporzionalmente
-            def _pick(ac_keys: list, n: int) -> list:
-                pool = []
-                per_key = max(1, n // len(ac_keys))
-                for key in ac_keys:
-                    pool.extend(_AC_ETF.get(key, [])[:per_key])
-                return pool[:n]
+            az_list, az_lbl = _pick_assets("Azioni", int(n_az), use_funds, prefer_funds)
+            ob_list, ob_lbl = _pick_assets("Obbligazioni", int(n_ob), use_funds, prefer_funds)
+            mp_list, mp_lbl = _pick_assets("Materie Prime", int(n_mp), use_funds, prefer_funds)
 
-            auto_isins += _pick(_MACRO_TO_AC["Azioni"], int(n_az))
-            auto_isins += _pick(_MACRO_TO_AC["Obbligazioni"], int(n_ob))
-            auto_isins += _pick(_MACRO_TO_AC["Materie Prime"], int(n_mp))
+            auto_isins = list(dict.fromkeys(az_list + ob_list + mp_list))
 
-            # Salva target allocazione per il vincolo settoriale
+            # Aggiungi info nel pool per gli ISIN non ancora presenti
+            for _isin in auto_isins:
+                if _isin not in _all_fund_pool:
+                    _pool_add(_isin, {"isin": _isin, "nome": _isin, "classificazione": ""})
+
             st.session_state["fe_selected_isins"] = list(dict.fromkeys(
                 st.session_state["fe_selected_isins"] + auto_isins
             ))
@@ -824,14 +959,16 @@ elif nav == "📈 Frontiera Efficiente":
                 "Obbligazioni": pct_ob / 100,
                 "Materie Prime": pct_mp / 100,
             }
-            st.session_state["fe_ac_map"] = {
-                isin: "Azioni" for isin in _pick(_MACRO_TO_AC["Azioni"], int(n_az))
-            } | {
-                isin: "Obbligazioni" for isin in _pick(_MACRO_TO_AC["Obbligazioni"], int(n_ob))
-            } | {
-                isin: "Materie Prime" for isin in _pick(_MACRO_TO_AC["Materie Prime"], int(n_mp))
-            }
-            st.toast(f"✅ Selezionati {len(auto_isins)} ETF per l'ottimizzazione")
+            st.session_state["fe_ac_map"] = (
+                {i: "Azioni" for i in az_list} |
+                {i: "Obbligazioni" for i in ob_list} |
+                {i: "Materie Prime" for i in mp_list}
+            )
+            n_fondi = sum(1 for i in auto_isins
+                          if i not in {e["isin"] for e in _ETF_STATIC_LIST})
+            n_etf   = len(auto_isins) - n_fondi
+            st.toast(f"✅ Selezionati {len(auto_isins)} strumenti "
+                     f"({n_fondi} fondi + {n_etf} ETF)")
             st.rerun()
 
     # ── SELEZIONE CORRENTE ─────────────────────────────────────────────────
