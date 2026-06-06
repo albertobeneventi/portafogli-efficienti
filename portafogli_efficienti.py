@@ -1484,9 +1484,39 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                     })
                 price_dict = get_multiple_nav(asset_list, period=period)
 
+                # Filtra serie piatte (var ≈ 0) prima dell'ottimizzazione
+                _flat_isins = []
+                _good_price_dict = {}
+                for _p_isin, _p_ser in price_dict.items():
+                    if isinstance(_p_ser, pd.Series) and len(_p_ser) >= 6:
+                        _variance = float(_p_ser.pct_change().dropna().var())
+                        if _variance < 1e-8:
+                            _flat_isins.append(_p_isin)
+                        else:
+                            _good_price_dict[_p_isin] = _p_ser
+                    else:
+                        _good_price_dict[_p_isin] = _p_ser
+
+                if _flat_isins:
+                    _flat_names = [str(_all_fund_pool.get(i,{}).get("nome",i))[:35]
+                                   for i in _flat_isins]
+                    st.warning(
+                        f"⚠️ {len(_flat_isins)} serie storiche piatte escluse dall'ottimizzazione:\n" +
+                        "\n".join(f"- {n}" for n in _flat_names[:5]) +
+                        (f"\n...e altri {len(_flat_isins)-5}" if len(_flat_isins)>5 else "") +
+                        "\n\n**Causa:** fondi senza dati di performance o con dati in formato decimale.\n"
+                        "Clicca **🗑️ Svuota cache** nella sidebar se il problema persiste."
+                    )
+                    price_dict = _good_price_dict
+
             if len(price_dict) < 3:
-                st.error(f"Dati storici insufficienti: recuperati {len(price_dict)}/{len(sel_isins)} serie.")
-                st.info("Suggerimento: gli ETF (Lista C) hanno dati su yfinance. I fondi richiedono Morningstar/FondiDoc.")
+                st.error(
+                    f"Dati storici insufficienti: {len(price_dict)}/{len(sel_isins)} serie valide.\n\n"
+                    "**Suggerimenti:**\n"
+                    "- Usa gli ETF (Lista C) — hanno dati yfinance certi\n"
+                    "- Clicca **🗑️ Svuota cache** nella sidebar\n"
+                    "- I fondi richiedono Morningstar/FondiDoc (potrebbero non essere raggiungibili)"
+                )
             else:
                 with st.spinner("Ottimizzazione portafoglio..."):
                     rfr = st.session_state["risk_free_rate"] / 100
@@ -1550,19 +1580,31 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                 m_col[3].metric("📉 Max Drawdown stimato", f"{mdd:.2f}%")
 
         # ── Controllo qualità dati ───────────────────────────────────────
-        _ms_ret = ms.get("ret", 0) if ms and "error" not in ms else 0
-        _ms_vol = ms.get("vol", 0) if ms and "error" not in ms else 0
-        _ms_sh  = ms.get("sharpe", 0) if ms and "error" not in ms else 0
+        _ms_err  = ms.get("error", "") if ms else "nessun risultato"
+        _ms_ret  = ms.get("ret", 0) if ms and "error" not in ms else 0
+        _ms_vol  = ms.get("vol", 0) if ms and "error" not in ms else 0
+        _ms_sh   = ms.get("sharpe", 0) if ms and "error" not in ms else 0
 
-        _is_degenerate = abs(_ms_ret) < 0.02 or abs(_ms_sh) > 8
+        # Degenere = dati piatti O errore ottimizzatore
+        _is_degenerate = ("error" in (ms or {})) or abs(_ms_ret) < 0.02
 
         if _is_degenerate:
-            st.error(
-                f"🚫 **Dati non validi** — Rendimento {_ms_ret*100:.2f}% · Sharpe {_ms_sh:.2f}\n\n"
-                "Le serie storiche dei fondi sono piatte (probabilmente le performance "
-                "nell'Excel sono in formato decimale: 0.27 invece di 27%).\n\n"
-                "**Procedura di reset:**"
-            )
+            if _ms_err:
+                _msg = (
+                    f"🚫 **Errore ottimizzazione**: {_ms_err}\n\n"
+                    "Possibili cause:\n"
+                    "- Troppo pochi asset con dati validi (min 3)\n"
+                    "- Matrice di covarianza singolare (asset troppo correlati o serie piatte)\n"
+                    "- Vincoli impossibili (peso min × N asset > 100%)\n\n"
+                    "**Soluzione:** riduci i vincoli di peso o aggiungi più strumenti diversificati."
+                )
+            else:
+                _msg = (
+                    f"🚫 **Dati non validi** — Rendimento {_ms_ret*100:.2f}% · Sharpe {_ms_sh:.2f}\n\n"
+                    "Le serie storiche dei fondi sono piatte.\n"
+                    "Clicca **Svuota cache** qui sotto, poi ricalcola."
+                )
+            st.error(_msg)
             _rc1, _rc2, _rc3 = st.columns(3)
             if _rc1.button("1️⃣ Svuota cache", type="primary", use_container_width=True):
                 import os as _os
