@@ -37,7 +37,11 @@ def select_top_n_with_constraints(
     rispettando i vincoli di diversificazione.
     Tiebreaker: a parità di score (±5%) vince il fondo con retrocessione più alta.
     """
+    from .scoring import compute_scores_df
     df = df.copy()
+    # Assicura che score_qualita esista (failsafe se chiamata senza compute_scores_df)
+    if "score_qualita" not in df.columns:
+        df = compute_scores_df(df)
     # Tiebreaker: ordina per score desc, poi retrocessione desc
     df["_ret_tie"] = df.get("retrocessione", pd.Series(np.zeros(len(df)))).fillna(0)
     df = df.sort_values(["score_qualita", "_ret_tie"], ascending=[False, False]).reset_index(drop=True)
@@ -112,7 +116,10 @@ def _cap_monetari(df: pd.DataFrame, max_n: int = 10) -> pd.DataFrame:
 
     if len(mon_df) > max_n:
         # Tieni solo i top max_n per score
-        mon_df = mon_df.sort_values("score_qualita", ascending=False).head(max_n)
+        if "score_qualita" in mon_df.columns:
+            mon_df = mon_df.sort_values("score_qualita", ascending=False).head(max_n)
+        else:
+            mon_df = mon_df.head(max_n)
 
     return pd.concat([rest_df, mon_df], ignore_index=True)
 
@@ -132,9 +139,19 @@ def build_lista_generalisti(df_unified: pd.DataFrame, n: int = 100) -> pd.DataFr
     df = df_unified.copy()
     df = compute_scores_df(df)
 
-    perf_ref = df["perf_3y"].fillna(df["perf_1y"])
+    # Colonne perf opzionali: usa quelle disponibili
+    if "perf_3y" in df.columns and "perf_1y" in df.columns:
+        perf_ref = df["perf_3y"].fillna(df["perf_1y"])
+    elif "perf_3y" in df.columns:
+        perf_ref = df["perf_3y"]
+    elif "perf_1y" in df.columns:
+        perf_ref = df["perf_1y"]
+    else:
+        perf_ref = pd.Series([np.nan] * len(df), index=df.index)
+
+    _cl_col = df["classificazione"] if "classificazione" in df.columns else pd.Series([""] * len(df), index=df.index)
     mask = (
-        df["classificazione"].apply(is_generalista) &
+        _cl_col.apply(is_generalista) &
         perf_ref.notna()
     )
     df = df[mask].copy()
@@ -181,9 +198,11 @@ def build_lista_tematici(
     df = df_unified.copy()
     df = compute_scores_df(df)
 
+    _cl_col = df["classificazione"] if "classificazione" in df.columns else pd.Series([""] * len(df), index=df.index)
+    _p1_col = df["perf_1y"] if "perf_1y" in df.columns else pd.Series([np.nan] * len(df), index=df.index)
     mask = (
-        ~df["classificazione"].apply(is_generalista) &
-        df["perf_1y"].notna()
+        ~_cl_col.apply(is_generalista) &
+        _p1_col.notna()
     )
     df = df[mask].copy()
 

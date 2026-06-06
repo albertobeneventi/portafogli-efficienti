@@ -96,17 +96,30 @@ def compute_score(
 
 def compute_scores_df(df: pd.DataFrame) -> pd.DataFrame:
     """Aggiunge colonna 'score_qualita' al DataFrame unificato."""
+    def _safe_float(v):
+        """Converte a float, restituisce np.nan se non possibile."""
+        if v is None:
+            return np.nan
+        try:
+            f = float(v)
+            return f if not (f != f) else np.nan   # NaN check
+        except (TypeError, ValueError):
+            return np.nan
+
     scores = []
     for _, row in df.iterrows():
-        s = compute_score(
-            perf_3y_ann=row.get("perf_3y", np.nan),
-            perf_1y=row.get("perf_1y", np.nan),
-            volatility=row.get("volatilita", np.nan),
-            fida_stars=row.get("rating_fida", None),
-            perf_2022=row.get("perf_2022", np.nan),
-            perf_2023=row.get("perf_2023", np.nan),
-            perf_2024=row.get("perf_2024", np.nan),
-        )
+        try:
+            s = compute_score(
+                perf_3y_ann=_safe_float(row.get("perf_3y")),
+                perf_1y=_safe_float(row.get("perf_1y")),
+                volatility=_safe_float(row.get("volatilita")),
+                fida_stars=row.get("rating_fida", None),
+                perf_2022=_safe_float(row.get("perf_2022")),
+                perf_2023=_safe_float(row.get("perf_2023")),
+                perf_2024=_safe_float(row.get("perf_2024")),
+            )
+        except Exception:
+            s = 0.0
         scores.append(s)
     df = df.copy()
     df["score_qualita"] = scores
