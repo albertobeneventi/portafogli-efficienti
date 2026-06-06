@@ -266,8 +266,10 @@ def _normalize_perf(df: pd.DataFrame, col_map: dict) -> pd.DataFrame:
 
 def _autoscale_perf(df: pd.DataFrame, perf_cols: list[str]) -> pd.DataFrame:
     """
-    Se le performance sono in formato decimale (es. 0.27 invece di 27%),
-    moltiplica per 100. Criterio: mediana < 5 su almeno metà dei valori non-NaN.
+    Se le performance sono in formato decimale (es. 0.085 invece di 8.5%),
+    moltiplica per 100.
+    Criterio sicuro: il valore massimo assoluto è < 1.5 → certamente decimale.
+    (Evita falsi positivi su dataset con molti fondi obbligazionari a basso rendimento)
     """
     for col in perf_cols:
         if col not in df.columns:
@@ -275,8 +277,9 @@ def _autoscale_perf(df: pd.DataFrame, perf_cols: list[str]) -> pd.DataFrame:
         vals = pd.to_numeric(df[col], errors="coerce").dropna()
         if len(vals) == 0:
             continue
-        # Se il 75° percentile è < 5 e ci sono abbastanza valori → formato decimale
-        if vals.abs().quantile(0.75) < 5 and len(vals) > 3:
+        # Autoscale SOLO se il massimo assoluto è < 1.5 → tutti i valori sono in [−1.5, 1.5]
+        # In formato percentuale anche i fondi obbligazionari mostrano valori > 1.5 su 3 anni
+        if vals.abs().max() < 1.5 and len(vals) > 3:
             df[col] = df[col].apply(lambda x: x * 100 if pd.notna(x) and isinstance(x, (int, float)) else x)
     return df
 

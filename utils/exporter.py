@@ -377,7 +377,9 @@ def export_portfolio_pdf(
     styles = getSampleStyleSheet()
 
     def _p(name, **kw):
-        return ParagraphStyle(name, parent=styles["Normal"], fontName=_FONT_NAME, **kw)
+        # Se fontName è in kw (es. per h1/h2 bold), usa quello; altrimenti default
+        fn = kw.pop("fontName", _FONT_NAME)
+        return ParagraphStyle(name, parent=styles["Normal"], fontName=fn, **kw)
 
     title_style   = _p("T",  fontSize=20, textColor=NAVY_RL, spaceAfter=4)
     sub_style     = _p("S",  fontSize=9,  textColor=colors.HexColor("#666666"), spaceAfter=10)
