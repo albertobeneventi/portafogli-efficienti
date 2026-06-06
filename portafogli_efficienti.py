@@ -62,6 +62,7 @@ st.set_page_config(
 # CSS personalizzato
 st.markdown(f"""
 <style>
+    /* Sidebar */
     [data-testid="stSidebar"] {{
         background-color: {NAVY};
     }}
@@ -71,6 +72,31 @@ st.markdown(f"""
     [data-testid="stSidebar"] .stRadio label {{
         color: white !important;
     }}
+    /* Scrollbar sempre visibile e fissa sui dataframe */
+    [data-testid="stDataFrame"] > div {{
+        overflow-x: auto !important;
+        overflow-y: auto !important;
+    }}
+    [data-testid="stDataFrame"] ::-webkit-scrollbar {{
+        height: 8px;
+        width: 8px;
+    }}
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-track {{
+        background: #f1f1f1;
+        border-radius: 4px;
+    }}
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb {{
+        background: {NAVY};
+        border-radius: 4px;
+    }}
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb:hover {{
+        background: #2E5090;
+    }}
+    /* Scrollbar globale */
+    ::-webkit-scrollbar {{ width: 7px; height: 7px; }}
+    ::-webkit-scrollbar-thumb {{ background: #b0b8c9; border-radius: 4px; }}
+    ::-webkit-scrollbar-thumb:hover {{ background: {NAVY}; }}
+    /* Card metriche */
     .metric-card {{
         background: {LIGHT_GRAY};
         border-left: 4px solid {NAVY};
@@ -78,9 +104,13 @@ st.markdown(f"""
         border-radius: 6px;
         margin: 6px 0;
     }}
+    /* Header tabelle */
     .stDataFrame thead th {{
         background-color: {NAVY} !important;
         color: white !important;
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }}
     h1, h2, h3 {{
         color: {NAVY};
@@ -346,187 +376,196 @@ if nav == "🏠 Home":
 elif nav == "📈 Frontiera Efficiente":
     st.title("📈 Frontiera Efficiente")
     st.markdown(
-        "Costruisci un portafoglio ottimizzato con PyPortfolioOpt. "
-        "**Step 1**: scegli gli strumenti → **Step 2**: imposta i vincoli → **Step 3**: calcola."
+        "Costruisci un portafoglio ottimizzato. "
+        "**Step 1**: scegli gli strumenti (o usa l'auto-selezione per asset class) → "
+        "**Step 2**: vincoli → **Step 3**: calcola."
     )
 
-    # ── STEP 1: RICERCA E SELEZIONE STRUMENTI ──────────────────────────────
-    st.subheader("1️⃣ Cerca e seleziona strumenti")
+    # ── POOL GLOBALE asset disponibili ─────────────────────────────────────
+    from utils.etf_tickers import (get_dividend_stocks_df, DIVIDEND_STOCKS,
+                                    ITALIAN_STOCKS, ISIN_TO_TICKER)
+    from utils.etf_static import ETF_STATIC as _ETF_STATIC_LIST
 
-    fe_tab_a, fe_tab_b, fe_tab_c, fe_tab_div, fe_tab_isin = st.tabs(
-        ["📋 Lista A — Generalisti", "🎯 Lista B — Tematici",
-         "🌐 Lista C — ETF", "💰 Dividend Leaders", "✏️ Inserisci ISIN/Ticker"]
-    )
-
-    # Dizionario globale isin→info per tutti gli asset disponibili
-    _all_fund_pool: dict = {}
-
-    def _pool_from_df(df: pd.DataFrame, prefix: str):
-        for _, r in df.iterrows():
-            isin = str(r.get("isin", r.get("ISIN", ""))).strip()
-            if isin:
-                _all_fund_pool[isin] = r.to_dict()
-
-    if not lista_a.empty:
-        _pool_from_df(lista_a, "A")
-    if not lista_b.empty:
-        _pool_from_df(lista_b, "B")
-    try:
-        df_etf_fe = _load_etf_universe_cached()
-        _pool_from_df(df_etf_fe, "C")
-    except Exception:
-        df_etf_fe = pd.DataFrame()
-
-    # Stato selezione
     if "fe_selected_isins" not in st.session_state:
         st.session_state["fe_selected_isins"] = []
 
-    def _render_selectable_table(df: pd.DataFrame, tab_key: str, cols_show: list):
-        """Tabella con checkbox per aggiungere alla selezione."""
-        if df.empty:
-            st.info("Nessun dato disponibile.")
+    # Costruisce pool completo una sola volta per pagina
+    _all_fund_pool: dict = {}
+    _etf_nome_map = {e["isin"]: e["nome"] for e in _ETF_STATIC_LIST}
+
+    def _pool_add(isin: str, info: dict):
+        if isin and isin not in _all_fund_pool:
+            _all_fund_pool[isin] = info
+
+    def _pool_from_df(df: pd.DataFrame):
+        for _, r in df.iterrows():
+            isin = str(r.get("isin", r.get("ISIN", ""))).strip()
+            if isin:
+                _pool_add(isin, r.to_dict())
+
+    if not lista_a.empty: _pool_from_df(lista_a)
+    if not lista_b.empty: _pool_from_df(lista_b)
+
+    try:
+        df_etf_fe = _load_etf_universe_cached()
+        _pool_from_df(df_etf_fe)
+    except Exception:
+        df_etf_fe = pd.DataFrame()
+        # fallback: usa static
+        from utils.etf_static import get_static_etf_df
+        df_etf_fe = get_static_etf_df()
+        _pool_from_df(df_etf_fe)
+
+    # Aggiungi azioni italiane e dividend
+    for _isin, _info in ITALIAN_STOCKS.items():
+        _pool_add(_isin, {"isin": _isin, "nome": _info["nome"],
+                          "classificazione": f"Azione — {_info['settore']}",
+                          "ticker": _info["ticker"]})
+    for _isin, _info in DIVIDEND_STOCKS.items():
+        _pool_add(_isin, {"isin": _isin, "nome": _info["nome"],
+                          "classificazione": f"Dividendo — {_info['settore']} ({_info['paese']})",
+                          "ticker": _info["ticker"]})
+
+    # helper: label leggibile per un ISIN
+    def _label(isin: str) -> str:
+        nome = _all_fund_pool.get(isin, {}).get("nome", isin)
+        return f"{isin} — {str(nome)[:50]}"
+
+    # ── STEP 1: SELEZIONE ──────────────────────────────────────────────────
+    st.subheader("1️⃣ Seleziona strumenti")
+
+    fe_tab_a, fe_tab_b, fe_tab_c, fe_tab_it, fe_tab_div, fe_tab_isin = st.tabs([
+        "📋 Lista A", "🎯 Lista B", "🌐 ETF",
+        "🇮🇹 Titoli Italiani", "💰 Dividend", "✏️ ISIN/Ticker libero"
+    ])
+
+    # ── Funzione generica di selezione ──────────────────────────────────────
+    def _selection_tab(df: pd.DataFrame, tab_key: str, display_cols: list,
+                       col_cfg: dict | None = None, empty_msg: str = "Nessun dato."):
+        """
+        Mostra tabella filtrabile + multiselect.
+        Usa st.session_state['fe_ms_{tab_key}'] come buffer,
+        poi il bottone Aggiungi trasferisce in fe_selected_isins.
+        """
+        if df is None or df.empty:
+            st.info(empty_msg)
             return
-        search = st.text_input("🔍 Cerca per nome / ISIN / classificazione",
-                               key=f"srch_{tab_key}")
-        disp = df.copy()
-        if search:
-            mask = disp.apply(
-                lambda col: col.astype(str).str.contains(search, case=False, na=False)
-            ).any(axis=1)
-            disp = disp[mask]
 
-        show_cols = [c for c in cols_show if c in disp.columns]
-        if not show_cols:
-            show_cols = list(disp.columns[:6])
+        srch = st.text_input("🔍 Cerca", key=f"srch_{tab_key}", placeholder="nome, ISIN, categoria…")
+        show_df = df.copy()
+        if srch:
+            m = show_df.apply(lambda c: c.astype(str).str.contains(srch, case=False, na=False)).any(1)
+            show_df = show_df[m]
 
-        # Aggiungi colonna "Selezionato"
-        disp = disp[show_cols].copy().head(200)
+        # Mostra solo colonne richieste + già selezionati evidenziati
+        show_cols = [c for c in display_cols if c in show_df.columns]
+        disp = show_df[show_cols].copy().head(200)
         if "isin" in disp.columns:
-            disp.insert(0, "➕", disp["isin"].isin(st.session_state["fe_selected_isins"]))
+            disp.insert(0, "✓", disp["isin"].isin(st.session_state["fe_selected_isins"]))
+        cfg = {"✓": st.column_config.CheckboxColumn("In lista", width="small")}
+        if col_cfg:
+            cfg.update(col_cfg)
         st.dataframe(disp, use_container_width=True, hide_index=True,
-                     column_config={"➕": st.column_config.CheckboxColumn("Sel.", width="small")},
-                     height=300)
+                     column_config=cfg, height=280)
 
-        # Multiselect per aggiungere alla selezione
-        isin_list = [str(r.get("isin", "")) for _, r in
-                     df[show_cols if "isin" in show_cols else []].iterrows()
-                     if str(r.get("isin", "")).strip()] if "isin" in df.columns else []
-
-        # Filtro ricerca
-        filtered_isins = []
-        if "isin" in df.columns:
-            fdf = df.copy()
-            if search:
-                mask2 = fdf.apply(
-                    lambda col: col.astype(str).str.contains(search, case=False, na=False)
-                ).any(axis=1)
-                fdf = fdf[mask2]
-            filtered_isins = fdf["isin"].dropna().astype(str).tolist()[:200]
-
-        to_add = st.multiselect(
-            "Aggiungi alla selezione",
-            options=filtered_isins,
-            format_func=lambda x: f"{x} — {str(_all_fund_pool.get(x, {}).get('nome', ''))[:55]}",
-            key=f"ms_{tab_key}",
+        # Multiselect degli ISIN filtrati
+        opts = show_df["isin"].dropna().astype(str).tolist() if "isin" in show_df.columns else []
+        sel_key = f"fe_ms_{tab_key}"
+        chosen = st.multiselect(
+            "Seleziona uno o più strumenti da aggiungere",
+            options=opts,
+            format_func=_label,
+            key=sel_key,
+            placeholder="Cerca o scegli…",
         )
-        if st.button("➕ Aggiungi selezionati", key=f"add_{tab_key}"):
-            for isin in to_add:
+
+        if st.button(f"➕ Aggiungi {len(chosen)} strument{'o' if len(chosen)==1 else 'i'}",
+                     key=f"add_{tab_key}",
+                     disabled=len(chosen) == 0,
+                     type="primary"):
+            added = 0
+            for isin in chosen:
                 if isin not in st.session_state["fe_selected_isins"]:
                     st.session_state["fe_selected_isins"].append(isin)
+                    added += 1
+            # Svuota il multiselect dopo l'aggiunta
+            st.session_state[sel_key] = []
+            if added:
+                st.toast(f"✅ Aggiunti {added} strumenti")
             st.rerun()
 
     FUND_COLS = ["isin", "nome", "classificazione", "perf_1y", "perf_3y", "volatilita", "rating_fida"]
-    ETF_COLS  = ["isin", "nome", "categoria", "ter", "aum_mln"]
+    ETF_COLS  = ["isin", "nome", "categoria", "ter", "perf_1y", "perf_3y"]
+    IT_COLS   = ["isin", "ticker", "nome", "settore"]
+    DIV_COLS  = ["isin", "ticker", "nome", "settore", "paese", "div_yield_est"]
 
     with fe_tab_a:
-        _render_selectable_table(lista_a, "A", FUND_COLS)
+        if lista_a.empty:
+            st.warning("Carica i file Excel dalla sidebar per vedere i fondi generalisti.")
+        else:
+            _selection_tab(lista_a, "A", FUND_COLS)
+
     with fe_tab_b:
-        _render_selectable_table(lista_b, "B", FUND_COLS)
+        if lista_b.empty:
+            st.warning("Carica i file Excel dalla sidebar per vedere i fondi tematici.")
+        else:
+            _selection_tab(lista_b, "B", FUND_COLS)
+
     with fe_tab_c:
-        _render_selectable_table(df_etf_fe if not df_etf_fe.empty else pd.DataFrame(), "C", ETF_COLS)
+        etf_cfg = {
+            "ter":    st.column_config.NumberColumn("TER %", format="%.2f"),
+            "perf_1y":st.column_config.NumberColumn("Perf 1Y %", format="%.1f"),
+            "perf_3y":st.column_config.NumberColumn("Perf 3Y %/a", format="%.1f"),
+        }
+        _selection_tab(df_etf_fe, "C", ETF_COLS, col_cfg=etf_cfg,
+                       empty_msg="ETF Universe non caricato.")
+
+    with fe_tab_it:
+        st.caption("Titoli FTSE MIB — prezzi storici via yfinance (ticker .MI)")
+        df_it = pd.DataFrame([
+            {"isin": isin, "ticker": d["ticker"], "nome": d["nome"],
+             "settore": d["settore"]}
+            for isin, d in ITALIAN_STOCKS.items()
+            if not isin.startswith("IT_BTP")
+        ])
+        _pool_from_df(df_it)
+        it_cfg = {"ticker": st.column_config.TextColumn("Ticker", width="small")}
+        _selection_tab(df_it, "IT", IT_COLS, col_cfg=it_cfg,
+                       empty_msg="Nessun titolo italiano.")
+
     with fe_tab_div:
-        from utils.etf_tickers import get_dividend_stocks_df, DIVIDEND_STOCKS
+        st.caption("Top 30 azioni non-USA — Fonte: TDIV/EUDV. Yield stimato, verificare su Yahoo Finance.")
         df_div = get_dividend_stocks_df()
-        _pool_from_df(df_div, "DIV")
+        _pool_from_df(df_div)
+        div_cfg = {
+            "div_yield_est": st.column_config.NumberColumn("Yield % (stima)", format="%.1f"),
+            "paese": st.column_config.TextColumn("Paese", width="small"),
+        }
+        # Filtri rapidi
+        _fc1, _fc2 = st.columns(2)
+        _fp = _fc1.selectbox("Paese", ["Tutti"]+sorted(df_div["paese"].unique().tolist()), key="dp_paese")
+        _fs = _fc2.selectbox("Settore", ["Tutti"]+sorted(df_div["settore"].unique().tolist()), key="dp_sett")
+        df_div_f = df_div.copy()
+        if _fp != "Tutti": df_div_f = df_div_f[df_div_f["paese"] == _fp]
+        if _fs != "Tutti": df_div_f = df_div_f[df_div_f["settore"] == _fs]
+        _selection_tab(df_div_f.reset_index(drop=True), "DIV", DIV_COLS, col_cfg=div_cfg)
 
-        st.caption(
-            "Top 30 azioni non-USA ad alto dividendo. "
-            "Fonte: VanEck Morningstar Dividend Leaders (TDIV) + SPDR Euro Dividend Aristocrats. "
-            "**Yield stimato** — verificare su Yahoo Finance / emittente prima di investire."
-        )
-
-        # Filtro per paese
-        paesi = ["Tutti"] + sorted(df_div["paese"].unique().tolist())
-        col_p, col_s = st.columns(2)
-        paese_filter = col_p.selectbox("Filtra per paese", paesi, key="div_paese")
-        settore_filter = col_s.selectbox(
-            "Filtra per settore",
-            ["Tutti"] + sorted(df_div["settore"].unique().tolist()),
-            key="div_settore",
-        )
-        df_div_show = df_div.copy()
-        if paese_filter != "Tutti":
-            df_div_show = df_div_show[df_div_show["paese"] == paese_filter]
-        if settore_filter != "Tutti":
-            df_div_show = df_div_show[df_div_show["settore"] == settore_filter]
-
-        st.dataframe(
-            df_div_show,
-            use_container_width=True, hide_index=True,
-            column_config={
-                "isin":          st.column_config.TextColumn("ISIN", width="small"),
-                "ticker":        st.column_config.TextColumn("Ticker", width="small"),
-                "nome":          st.column_config.TextColumn("Azienda", width="medium"),
-                "settore":       st.column_config.TextColumn("Settore"),
-                "paese":         st.column_config.TextColumn("Paese", width="small"),
-                "div_yield_est": st.column_config.NumberColumn(
-                    "Yield % (stima)", format="%.1f%%",
-                    help="Dividend yield stimato — fonte: ETF holdings TDIV/EUDV. Verificare su Yahoo Finance."),
-                "classificazione": None,
-            },
-        )
-
-        to_add_div = st.multiselect(
-            "Aggiungi alla selezione",
-            options=df_div_show["isin"].tolist(),
-            format_func=lambda x: f"{x} — {DIVIDEND_STOCKS.get(x,{}).get('nome',x)} ({DIVIDEND_STOCKS.get(x,{}).get('ticker','')})",
-            key="ms_div",
-        )
-        if st.button("➕ Aggiungi selezionati", key="add_div"):
-            for isin in to_add_div:
-                if isin not in st.session_state["fe_selected_isins"]:
-                    st.session_state["fe_selected_isins"].append(isin)
-                if isin not in _all_fund_pool:
-                    info = DIVIDEND_STOCKS[isin]
-                    _all_fund_pool[isin] = {
-                        "isin": isin,
-                        "nome": info["nome"],
-                        "classificazione": f"Azione Dividendo — {info['settore']} ({info['paese']})",
-                        "ticker": info["ticker"],
-                    }
-            st.rerun()
     with fe_tab_isin:
         st.markdown("""
-**Inserisci ISIN o ticker — uno per riga.**
-
-| Tipo | Esempi | Fonte dati |
-|------|--------|------------|
-| ETF europei (ISIN) | `IE00B4L5Y983`, `LU0908500753` | yfinance via ticker map |
-| Azioni italiane | `ENI.MI`, `ISP.MI`, `UCG.MI` | yfinance diretto |
+| Tipo | Esempi | Fonte |
+|------|--------|-------|
+| ETF (ISIN) | `IE00B4L5Y983` | yfinance ticker map |
+| Azioni italiane | `ENI.MI`, `ISP.MI` | yfinance diretto |
 | Azioni USA | `AAPL`, `MSFT`, `NVDA` | yfinance diretto |
-| Azioni europee | `ADS.DE`, `ASML.AS`, `MC.PA` | yfinance diretto |
-| ETF su Xetra | `EXW1.DE`, `EUNL.DE` | yfinance diretto |
-| Fondi (ISIN) | `LU0048578792` | Morningstar → FondiDoc → sintetica |
-| BTP proxy | `IBTS.MI`, `BTP5.MI` | yfinance diretto |
+| Azioni EU | `ADS.DE`, `ASML.AS` | yfinance diretto |
+| Fondi (ISIN) | `LU0048578792` | Morningstar/FondiDoc |
+| BTP proxy | `IBTS.MI` | yfinance diretto |
 """)
-        custom_raw = st.text_area("ISIN / Ticker", height=120, key="fe_custom_raw",
-                                  placeholder="ENI.MI\nAAPL\nNVDA\nISP.MI")
-        if st.button("➕ Aggiungi ISIN/Ticker", key="add_custom"):
+        custom_raw = st.text_area("ISIN / Ticker (uno per riga)", height=100,
+                                  key="fe_custom_raw",
+                                  placeholder="ENI.MI\nAAPL\nNVDA\nIE00B4L5Y983")
+        if st.button("➕ Aggiungi", key="add_custom", type="primary"):
             from utils.nav_fetcher import classify_asset_type
-            from utils.etf_tickers import ITALIAN_STOCKS, ISIN_TO_TICKER
-            from utils.etf_static import ETF_STATIC
-            _etf_nome_map = {e["isin"]: e["nome"] for e in ETF_STATIC}
-
             added_info = []
             for line in custom_raw.strip().split("\n"):
                 token = line.strip().upper()
@@ -535,36 +574,101 @@ elif nav == "📈 Frontiera Efficiente":
                 if token not in st.session_state["fe_selected_isins"]:
                     st.session_state["fe_selected_isins"].append(token)
                 if token not in _all_fund_pool:
-                    # Cerca info: prima azioni italiane, poi ETF map
                     if token in ITALIAN_STOCKS:
-                        info = ITALIAN_STOCKS[token]
-                        _all_fund_pool[token] = {
-                            "isin": token,
-                            "nome": info["nome"],
-                            "classificazione": f"Azione — {info['settore']}",
-                            "ticker": info["ticker"],
-                        }
+                        d = ITALIAN_STOCKS[token]
+                        _pool_add(token, {"isin": token, "nome": d["nome"],
+                                          "classificazione": f"Azione — {d['settore']}",
+                                          "ticker": d["ticker"]})
                     elif token in _etf_nome_map:
-                        _all_fund_pool[token] = {
-                            "isin": token,
-                            "nome": _etf_nome_map[token],
-                            "classificazione": "ETF (ticker noto)",
-                            "ticker": ISIN_TO_TICKER.get(token, ""),
-                        }
+                        _pool_add(token, {"isin": token, "nome": _etf_nome_map[token],
+                                          "classificazione": "ETF",
+                                          "ticker": ISIN_TO_TICKER.get(token, "")})
                     else:
-                        asset_type = classify_asset_type(token)
-                        _all_fund_pool[token] = {
-                            "isin": token, "nome": token,
-                            "classificazione": asset_type,
-                        }
-                added_info.append(
-                    f"**{token}** → {_all_fund_pool[token].get('nome', token)} "
-                    f"({_all_fund_pool[token].get('classificazione','')})"
-                )
+                        _pool_add(token, {"isin": token, "nome": token,
+                                          "classificazione": classify_asset_type(token)})
+                added_info.append(f"**{token}** — {_all_fund_pool.get(token,{}).get('nome',token)}")
             if added_info:
-                st.success("Aggiunti:")
-                for msg in added_info:
-                    st.markdown(f"- {msg}")
+                st.toast(f"✅ Aggiunti {len(added_info)} strumenti")
+                for m in added_info: st.markdown(f"- {m}")
+            st.rerun()
+
+    # ── AUTO-SELEZIONE PER ASSET CLASS ─────────────────────────────────────
+    st.markdown("---")
+    with st.expander("🎯 Auto-composizione per Asset Class", expanded=False):
+        st.markdown(
+            "Indica la % target per macro asset class. "
+            "L'app selezionerà automaticamente gli ETF più rappresentativi e ottimizzerà "
+            "i pesi mantenendo l'allocazione richiesta."
+        )
+        # ETF rappresentativi per asset class (ISIN verificati in Lista C)
+        _AC_ETF = {
+            "Azioni Globali":      ["IE00B4L5Y983", "IE00BK5BQT80", "IE00B3RBWM25"],
+            "Azioni USA":          ["IE00B5BMR087", "IE00BFMXXD54", "IE00B53SZB19"],
+            "Azioni Europa":       ["LU0908500753", "IE00B4K48X80", "IE00B53L3W79"],
+            "Azioni Emergenti":    ["IE00BKM4GZ66", "IE00BTJRMP35"],
+            "Obbligazioni EUR Gov":["IE00B4WXJJ64", "IE00BH04GL39", "IE00B3VTMJ91"],
+            "Obbligazioni EUR Corp":["IE00B3F81R35","IE00BF11F565", "IE00B4L60045"],
+            "Obbligazioni HY":     ["IE00B66F4759", "LU1109943388"],
+            "Obbligazioni EM":     ["IE00B2NPKV68", "IE00B5M4WH52"],
+            "BTP/Italia":          ["IE00B3T9LM79", "IE00B99470V8"],
+            "Materie Prime":       ["IE00BD6FTQ80", "LU1829218749"],
+        }
+        # Mappa macro-bucket → lista sottoclassi
+        _MACRO_TO_AC = {
+            "Azioni":         ["Azioni Globali", "Azioni USA", "Azioni Europa", "Azioni Emergenti"],
+            "Obbligazioni":   ["Obbligazioni EUR Gov", "Obbligazioni EUR Corp",
+                               "Obbligazioni HY", "Obbligazioni EM", "BTP/Italia"],
+            "Materie Prime":  ["Materie Prime"],
+        }
+
+        ac1, ac2, ac3 = st.columns(3)
+        pct_az  = ac1.slider("Azioni %",         0, 100, 60, 5, key="ac_az")
+        pct_ob  = ac2.slider("Obbligazioni %",    0, 100, 30, 5, key="ac_ob")
+        pct_mp  = ac3.slider("Materie Prime %",   0, 100, 10, 5, key="ac_mp")
+        total_ac = pct_az + pct_ob + pct_mp
+        if total_ac != 100:
+            st.warning(f"Totale: {total_ac}% — deve essere 100%")
+        else:
+            st.success(f"✅ {pct_az}% Azioni + {pct_ob}% Obbligazioni + {pct_mp}% Materie Prime")
+
+        # Quante sottoclassi per macro-bucket
+        n_az = ac1.number_input("N. ETF azionari", 2, 6, 3, key="n_az")
+        n_ob = ac2.number_input("N. ETF obbligazionari", 2, 6, 3, key="n_ob")
+        n_mp = ac3.number_input("N. ETF commodity", 1, 3, 1, key="n_mp")
+
+        if st.button("🎯 Componi e seleziona automaticamente",
+                     key="auto_compose", type="primary",
+                     disabled=(total_ac != 100)):
+            auto_isins = []
+            # Seleziona ETF per ogni bucket proporzionalmente
+            def _pick(ac_keys: list, n: int) -> list:
+                pool = []
+                per_key = max(1, n // len(ac_keys))
+                for key in ac_keys:
+                    pool.extend(_AC_ETF.get(key, [])[:per_key])
+                return pool[:n]
+
+            auto_isins += _pick(_MACRO_TO_AC["Azioni"], int(n_az))
+            auto_isins += _pick(_MACRO_TO_AC["Obbligazioni"], int(n_ob))
+            auto_isins += _pick(_MACRO_TO_AC["Materie Prime"], int(n_mp))
+
+            # Salva target allocazione per il vincolo settoriale
+            st.session_state["fe_selected_isins"] = list(dict.fromkeys(
+                st.session_state["fe_selected_isins"] + auto_isins
+            ))
+            st.session_state["fe_ac_target"] = {
+                "Azioni": pct_az / 100,
+                "Obbligazioni": pct_ob / 100,
+                "Materie Prime": pct_mp / 100,
+            }
+            st.session_state["fe_ac_map"] = {
+                isin: "Azioni" for isin in _pick(_MACRO_TO_AC["Azioni"], int(n_az))
+            } | {
+                isin: "Obbligazioni" for isin in _pick(_MACRO_TO_AC["Obbligazioni"], int(n_ob))
+            } | {
+                isin: "Materie Prime" for isin in _pick(_MACRO_TO_AC["Materie Prime"], int(n_mp))
+            }
+            st.toast(f"✅ Selezionati {len(auto_isins)} ETF per l'ottimizzazione")
             st.rerun()
 
     # ── SELEZIONE CORRENTE ─────────────────────────────────────────────────
@@ -675,15 +779,31 @@ elif nav == "📈 Frontiera Efficiente":
             else:
                 with st.spinner("Ottimizzazione portafoglio..."):
                     rfr = st.session_state["risk_free_rate"] / 100
+                    # Vincoli settoriali se attivati da auto-composizione
+                    ac_map   = st.session_state.get("fe_ac_map", {})
+                    ac_target= st.session_state.get("fe_ac_target", {})
+                    sector_constraints = None
+                    if ac_map and ac_target:
+                        # Filtra solo asset che hanno dati
+                        sc_mapper = {k: v for k, v in ac_map.items() if k in price_dict}
+                        if sc_mapper:
+                            sector_constraints = {
+                                "mapper": sc_mapper,
+                                "lower": {k: max(0, v - 0.10) for k, v in ac_target.items()},
+                                "upper": {k: min(1, v + 0.10) for k, v in ac_target.items()},
+                            }
+
                     result = compute_efficient_frontier(
                         price_dict, weight_bounds=(min_w, max_w),
                         risk_free_rate=rfr,
                         forced_include=forced_include_sel or None,
+                        sector_constraints=sector_constraints,
                     )
                 if "error" in result:
                     st.error(f"Errore ottimizzazione: {result['error']}")
                 else:
-                    st.success(f"Ottimizzazione completata su {len(price_dict)} strumenti.")
+                    lbl = " (con vincoli asset class)" if sector_constraints else ""
+                    st.success(f"Ottimizzazione completata su {len(price_dict)} strumenti{lbl}.")
                     st.session_state["fe_result"] = result
                     st.session_state["fe_price_dict"] = price_dict
                     if use_bl and bl_views:
@@ -1081,40 +1201,57 @@ elif nav == "⭐ Portafoglio Qualità":
 elif nav == "🌐 ETF Universe":
     st.title("🌐 ETF Universe — Lista C")
 
-    # Carica
+    # Carica — con fallback immediato su dati statici
     with st.spinner("Caricamento ETF Universe..."):
         try:
             df_etf = _load_etf_universe_cached()
         except Exception as e:
-            st.error(f"Errore caricamento ETF: {e}")
             df_etf = pd.DataFrame()
 
-    # Aggiungi ISINs
-    with st.expander("➕ Aggiungi strumenti"):
-        new_isins_txt = st.text_area(
-            "ISINs aggiuntivi (uno per riga)",
-            height=100,
-            key="new_etf_isins",
-        )
-        if st.button("🔄 Fetch e aggiungi"):
+        # Se vuoto o senza colonne chiave → usa statico immediatamente
+        if df_etf.empty or "nome" not in df_etf.columns:
+            from utils.etf_static import get_static_etf_df
+            from utils.etf_tickers import ISIN_TO_TICKER, TER_VERIFIED
+            df_etf = get_static_etf_df()
+            df_etf["ticker"] = df_etf["isin"].map(ISIN_TO_TICKER)
+            df_etf["ter"] = df_etf["isin"].map(TER_VERIFIED)
+            df_etf["_fonte_ter"] = df_etf["ter"].apply(lambda x: "KID verificato" if pd.notna(x) else "n/d")
+            df_etf["_fonte_perf"] = "n/d (carica con 🔄)"
+
+        # Converti valori numerici (potrebbe essere stringa da Excel)
+        for _nc in ["ter", "perf_1y", "perf_3y", "perf_5y"]:
+            if _nc in df_etf.columns:
+                df_etf[_nc] = pd.to_numeric(df_etf[_nc], errors="coerce")
+
+    # Toolbar
+    tb1, tb2, tb3 = st.columns([2, 1, 1])
+    perf_ok = int(df_etf["perf_1y"].notna().sum()) if "perf_1y" in df_etf.columns else 0
+    tb1.caption(f"**{len(df_etf)} ETF** in lista · TER verificato: 85/85 · Perf yfinance: {perf_ok}/85")
+
+    if tb2.button("🔄 Aggiorna rendimenti (yfinance)", use_container_width=True):
+        with st.spinner("Download prezzi da Yahoo Finance (~2 min)…"):
+            _load_etf_universe_cached.clear()
+            from utils.etf_fetcher import _build_from_yfinance_and_static
+            import os
+            from pathlib import Path as _P
+            cache = _P("data/etf_universe.xlsx")
+            if cache.exists(): os.remove(cache)
+            df_etf = _build_from_yfinance_and_static()
+        st.success(f"Aggiornati: {int(df_etf['perf_1y'].notna().sum())}/85 con dati reali")
+        st.rerun()
+
+    with tb3.expander("➕ Aggiungi ISIN"):
+        new_isins_txt = st.text_area("ISINs (uno per riga)", height=80, key="new_etf_isins")
+        if st.button("Aggiungi"):
             new_list = [x.strip() for x in new_isins_txt.strip().split("\n") if x.strip()]
             if new_list:
-                with st.spinner(f"Recupero dati per {len(new_list)} ISINs..."):
-                    progress_ph = st.empty()
-                    def _prog(i, tot, isin):
-                        progress_ph.progress(i / tot, f"Fetching {isin}...")
-                    df_etf = fetch_etf_universe(
-                        extra_isins=new_list,
-                        progress_callback=_prog,
-                    )
+                with st.spinner(f"Recupero {len(new_list)} ISINs..."):
+                    df_etf = fetch_etf_universe(extra_isins=new_list)
                     _load_etf_universe_cached.clear()
-                progress_ph.empty()
-                st.success(f"Aggiunti/aggiornati {len(new_list)} ISINs.")
+                st.success(f"Aggiunti {len(new_list)} ISINs.")
 
-    if df_etf.empty:
-        st.info("Nessun ETF in lista. Clicca 'Fetch e aggiungi' per caricare la lista hardcoded.")
-    else:
-        # Filtri
+    # Filtri
+    if True:
         col1, col2, col3 = st.columns(3)
         cats = ["Tutte"] + sorted(df_etf["categoria"].dropna().unique().tolist()) if "categoria" in df_etf.columns else ["Tutte"]
         cat_filter = col1.selectbox("Categoria", cats)

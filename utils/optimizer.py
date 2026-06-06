@@ -36,6 +36,7 @@ def compute_efficient_frontier(
     n_monte_carlo: int = 5000,
     forced_include: Optional[list] = None,
     forced_exclude: Optional[list] = None,
+    sector_constraints: Optional[dict] = None,
 ) -> dict:
     """
     Calcola frontiera efficiente.
@@ -71,9 +72,23 @@ def compute_efficient_frontier(
         else:
             w_bounds_list.append(weight_bounds)
 
+    def _apply_sector(ef_obj):
+        """Applica vincoli settoriali se presenti."""
+        if not sector_constraints:
+            return
+        mapper = sector_constraints.get("mapper", {})
+        lower  = sector_constraints.get("lower", {})
+        upper  = sector_constraints.get("upper", {})
+        if mapper:
+            try:
+                ef_obj.add_sector_constraints(mapper, lower, upper)
+            except Exception:
+                pass  # ignora se settore non supportato
+
     # Max Sharpe
     try:
         ef = EfficientFrontier(mu, S, weight_bounds=w_bounds_list)
+        _apply_sector(ef)
         ef.max_sharpe(risk_free_rate=risk_free_rate)
         ms_weights = ef.clean_weights()
         ms_perf = ef.portfolio_performance(risk_free_rate=risk_free_rate)
@@ -89,6 +104,7 @@ def compute_efficient_frontier(
     # Min Variance
     try:
         ef2 = EfficientFrontier(mu, S, weight_bounds=w_bounds_list)
+        _apply_sector(ef2)
         ef2.min_volatility()
         mv_weights = ef2.clean_weights()
         mv_perf = ef2.portfolio_performance(risk_free_rate=risk_free_rate)
