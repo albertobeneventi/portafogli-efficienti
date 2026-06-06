@@ -62,16 +62,44 @@ st.set_page_config(
 # CSS personalizzato
 st.markdown(f"""
 <style>
-    /* ── Sidebar sempre visibile — nasconde il pulsante collasso ── */
+    /* ── Sidebar fissa e sempre scrollabile ── */
     [data-testid="stSidebar"] {{
         background-color: {NAVY};
-        overflow-y: auto !important;
+        overflow-y: scroll !important;   /* scroll = barra SEMPRE visibile */
+        overflow-x: hidden !important;
+    }}
+    /* Il div interno deve poter crescere oltre lo schermo */
+    [data-testid="stSidebar"] > div:first-child {{
+        overflow-y: scroll !important;
+        height: 100% !important;
+        padding-bottom: 2rem;
+    }}
+    section[data-testid="stSidebar"] {{
+        overflow-y: scroll !important;
+    }}
+    /* Scrollbar sidebar: sempre visibile, colore chiaro su sfondo navy */
+    [data-testid="stSidebar"]::-webkit-scrollbar,
+    [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar {{
+        width: 8px !important;
+        display: block !important;
+    }}
+    [data-testid="stSidebar"]::-webkit-scrollbar-track,
+    [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-track {{
+        background: rgba(255,255,255,0.15) !important;
+        border-radius: 4px;
+    }}
+    [data-testid="stSidebar"]::-webkit-scrollbar-thumb,
+    [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-thumb {{
+        background: rgba(255,255,255,0.55) !important;
+        border-radius: 4px;
+        min-height: 40px;
+    }}
+    [data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover,
+    [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-thumb:hover {{
+        background: rgba(255,255,255,0.85) !important;
     }}
     /* Nasconde la freccia collasso sidebar */
-    [data-testid="collapsedControl"] {{
-        display: none !important;
-    }}
-    /* Nasconde anche il pulsante < che appare sul bordo */
+    [data-testid="collapsedControl"],
     button[kind="header"],
     [data-testid="stSidebarCollapseButton"] {{
         display: none !important;
@@ -275,43 +303,100 @@ with st.sidebar:
     st.markdown(f"## 📊 {PAGE_TITLE}")
     st.markdown("---")
 
+    # ── STATO DATI CARICATI (sempre visibile, sopra i file uploader) ─────
+    _ts_t = st.session_state.get("_terzi_upload_ts")
+    _ts_a = st.session_state.get("_azimut_upload_ts")
+    _nm_t = st.session_state.get("_terzi_upload_name", "Fondi Terzi")
+    _nm_a = st.session_state.get("_azimut_upload_name", "Fondi Azimut")
+
+    if _ts_t or _ts_a:
+        # Dati caricati — mostra riepilogo evidente
+        _last_ts = max(t for t in [_ts_t, _ts_a] if t is not None)
+        st.markdown(
+            f"<div style='background:rgba(255,255,255,0.12);border-radius:8px;"
+            f"padding:10px 12px;margin-bottom:8px;'>"
+            f"<div style='font-size:11px;color:rgba(255,255,255,0.7);'>ULTIMO CARICAMENTO</div>"
+            f"<div style='font-size:15px;font-weight:bold;color:white;'>"
+            f"{_last_ts.strftime('%d/%m/%Y %H:%M')}</div>"
+            + (f"<div style='font-size:10px;color:rgba(255,255,255,0.6);margin-top:2px;'>"
+               f"{'✅ ' + _nm_t[:28] if _ts_t else ''}"
+               f"{'<br>✅ ' + _nm_a[:28] if _ts_a else ''}</div>" )
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<div style='background:rgba(255,180,0,0.18);border-radius:8px;"
+            "padding:8px 12px;margin-bottom:8px;font-size:12px;color:#FFD080;'>"
+            "⚠️ Nessun file caricato<br><span style='font-size:10px;opacity:0.8'>"
+            "Apri «Carica file dati» qui sotto</span></div>",
+            unsafe_allow_html=True,
+        )
+
     # Upload file Excel
-    with st.expander("📂 Carica file dati", expanded=False):
-        st.caption("Obbligatori per dati reali; senza file → modalità Demo")
+    with st.expander("📂 Carica file dati", expanded=(_ts_t is None or _ts_a is None)):
+        st.caption("I dati restano in memoria fino al prossimo caricamento.")
         up_terzi = st.file_uploader(
-            "Fondi Terzi (tabella_fondi_arricchita.xlsx)",
+            "Fondi Terzi",
             type=["xlsx"],
             key="up_terzi",
+            help="tabella_fondi_arricchita.xlsx",
         )
         up_azimut = st.file_uploader(
-            "Fondi Azimut (fondi_azimut_isin_completo_RATED.xlsx)",
+            "Fondi Azimut",
             type=["xlsx"],
             key="up_azimut",
+            help="fondi_azimut_isin_completo_RATED.xlsx",
         )
-        if up_terzi or up_azimut:
-            if st.button("🔄 Ricarica dati", use_container_width=True):
+        _has_new = (up_terzi is not None or up_azimut is not None)
+        if _has_new:
+            if st.button("🔄 Ricarica dati con nuovi file", use_container_width=True,
+                         type="primary"):
                 _load_all_data.clear()
                 _load_preselection.clear()
                 st.rerun()
+        if st.button("🗑️ Dimentica file caricati", use_container_width=True,
+                     help="Cancella i dati dalla memoria e torna in modalità Demo"):
+            for _k in ["_terzi_bytes_cached","_azimut_bytes_cached",
+                       "_terzi_upload_ts","_azimut_upload_ts",
+                       "_terzi_upload_name","_azimut_upload_name"]:
+                st.session_state.pop(_k, None)
+            _load_all_data.clear()
+            _load_preselection.clear()
+            st.rerun()
 
     st.markdown("---")
 
 
 # ---------------------------------------------------------------------------
-# CARICAMENTO DATI
+# CARICAMENTO DATI — con persistenza bytes in session_state
 # ---------------------------------------------------------------------------
-_terzi_bytes = None
-_azimut_bytes = None
+# Se l'utente ha caricato nuovi file → salva bytes + timestamp
 try:
-    if st.session_state.get("up_terzi") is not None:
-        _terzi_bytes = st.session_state["up_terzi"].getvalue()
+    _up_t = st.session_state.get("up_terzi")
+    if _up_t is not None:
+        _new_bytes = _up_t.getvalue()
+        if _new_bytes:
+            st.session_state["_terzi_bytes_cached"]   = _new_bytes
+            st.session_state["_terzi_upload_ts"]      = datetime.now()
+            st.session_state["_terzi_upload_name"]    = _up_t.name
 except Exception:
     pass
+
 try:
-    if st.session_state.get("up_azimut") is not None:
-        _azimut_bytes = st.session_state["up_azimut"].getvalue()
+    _up_a = st.session_state.get("up_azimut")
+    if _up_a is not None:
+        _new_bytes = _up_a.getvalue()
+        if _new_bytes:
+            st.session_state["_azimut_bytes_cached"]  = _new_bytes
+            st.session_state["_azimut_upload_ts"]     = datetime.now()
+            st.session_state["_azimut_upload_name"]   = _up_a.name
 except Exception:
     pass
+
+# Usa i bytes dalla cache persistente (rimangono anche se il file uploader viene chiuso)
+_terzi_bytes  = st.session_state.get("_terzi_bytes_cached")
+_azimut_bytes = st.session_state.get("_azimut_bytes_cached")
 
 with st.spinner("Caricamento dati in corso..."):
     try:
@@ -339,9 +424,12 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 with st.sidebar:
     if st.session_state.get("demo_mode"):
-        st.warning("⚠️ Modalità Demo — carica i file Excel per dati reali")
+        st.warning("⚠️ Modalità Demo")
     else:
-        st.success(f"✅ {len(df_terzi)+len(df_azimut)} fondi caricati")
+        _tot = len(df_terzi) + len(df_azimut)
+        _ts_disp = st.session_state.get("_terzi_upload_ts") or st.session_state.get("_azimut_upload_ts")
+        _data_str = _ts_disp.strftime("%d/%m/%Y") if _ts_disp else "—"
+        st.success(f"✅ {_tot:,} fondi  ·  {_data_str}")
     st.markdown("---")
     nav = st.radio(
         "Navigazione",
