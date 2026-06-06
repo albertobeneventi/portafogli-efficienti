@@ -7,11 +7,53 @@ import pandas as pd
 
 FIDA_MULT = {None: 1.0, 1: 0.8, 2: 0.9, 3: 1.0, 4: 1.15, 5: 1.30}
 
+# Keyword che identificano fondi TEMATICI/NICCHIA (esclusi dai Generalisti).
+# Tutto ciò che NON contiene queste keyword è considerato "generalista"
+# (ampio mercato, multi-asset, globale, bilanciato, obbligazionario diversificato, ecc.)
+KEYWORD_TEMATICI = [
+    # Paesi singoli o aree molto specifiche
+    "vietnam", "africa", "mena", "latin america", "latinoamerica",
+    "pakistan", "nigeria", "kenya", "frontier",
+    # Settoriali
+    "tecnologia", "technology", "tech",
+    "healthcare", "salute", "farmaceutic",
+    "biotech", "biotechnology",
+    "infrastructure", "infrastrutture",
+    "robotics", "robotica", "automation",
+    "acqua", "water",
+    "agricoltur", "agriculture",
+    "lusso", "luxury", "brand",
+    "energia rinnovabile", "clean energy", "energia pulita",
+    "difesa", "defense", "defence",
+    "minerari", "mining", "gold", "oro", "metalli preziosi",
+    "real estate", "immobiliare", "reit",
+    "finanziari", "financial",
+    # Obbligazionari molto specifici
+    "coco", "at1", "convertibili", "convertible",
+    "abs", "sukuk", "renminbi", "cnh",
+    "inflation link", "inflation-link",
+    # Tematici ESG ultra-specifici
+    "impact invest", "microfinance",
+]
+
+# Keyword che identificano SEMPRE un fondo come generalista
+# (usate come override positivo)
 KEYWORD_GENERALISTE = [
     "Globali", "Globale", "Bilanciati", "Bilanciato", "Flessibili",
     "Flessibile", "Ritorno Assoluto", "Multi-Asset", "Allocation",
     "Azionari Globali", "Obbligazionari Globali",
+    "Internazionali", "Internazionale",
+    "Paesi Sviluppati", "Mercati Sviluppati", "Worldwide", "World",
+    "Diversificati", "Diversificato",
+    "Total Return", "Absolute Return",
+    "Azionari Europa", "Azionari USA", "Azionari Emergenti",
+    "Obbligazionari Euro", "Obbligazionari High Yield",
+    "Obbligazionari Emergenti", "Obbligazionari Governativi",
+    "Obbligazionari Corporate", "Obbligazionari Societari",
+    "Bilanciati Moderati", "Bilanciati Aggressivi",
 ]
+# Nota: NON includere "Azionari" o "Obbligazionari" da soli —
+# matcherebbero "Azionari Settoriali" che è tematico.
 
 
 def compute_score(
@@ -72,7 +114,25 @@ def compute_scores_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def is_generalista(classificazione: str) -> bool:
-    if not isinstance(classificazione, str):
-        return False
+    """
+    Un fondo è GENERALISTA se:
+    - NON contiene keyword tematiche/nicchia (KEYWORD_TEMATICI), OPPURE
+    - Contiene keyword esplicitamente generaliste (KEYWORD_GENERALISTE override)
+
+    Logica invertita rispetto alla versione precedente: invece di cercare
+    cosa è generalista, escludiamo cosa è tematico/nicchia.
+    """
+    if not isinstance(classificazione, str) or not classificazione.strip():
+        return True   # classificazione assente → trattato come generalista
     cl = classificazione.lower()
-    return any(k.lower() in cl for k in KEYWORD_GENERALISTE)
+
+    # Override positivo: keyword esplicitamente generaliste
+    if any(k.lower() in cl for k in KEYWORD_GENERALISTE):
+        return True
+
+    # Escludi i tematici/nicchia
+    if any(k.lower() in cl for k in KEYWORD_TEMATICI):
+        return False
+
+    # Per default: tutto ciò che non è esplicitamente tematico è generalista
+    return True
