@@ -353,9 +353,9 @@ elif nav == "📈 Frontiera Efficiente":
     # ── STEP 1: RICERCA E SELEZIONE STRUMENTI ──────────────────────────────
     st.subheader("1️⃣ Cerca e seleziona strumenti")
 
-    fe_tab_a, fe_tab_b, fe_tab_c, fe_tab_isin = st.tabs(
+    fe_tab_a, fe_tab_b, fe_tab_c, fe_tab_div, fe_tab_isin = st.tabs(
         ["📋 Lista A — Generalisti", "🎯 Lista B — Tematici",
-         "🌐 Lista C — ETF", "✏️ Inserisci ISIN/Ticker"]
+         "🌐 Lista C — ETF", "💰 Dividend Leaders", "✏️ Inserisci ISIN/Ticker"]
     )
 
     # Dizionario globale isin→info per tutti gli asset disponibili
@@ -444,6 +444,67 @@ elif nav == "📈 Frontiera Efficiente":
         _render_selectable_table(lista_b, "B", FUND_COLS)
     with fe_tab_c:
         _render_selectable_table(df_etf_fe if not df_etf_fe.empty else pd.DataFrame(), "C", ETF_COLS)
+    with fe_tab_div:
+        from utils.etf_tickers import get_dividend_stocks_df, DIVIDEND_STOCKS
+        df_div = get_dividend_stocks_df()
+        _pool_from_df(df_div, "DIV")
+
+        st.caption(
+            "Top 30 azioni non-USA ad alto dividendo. "
+            "Fonte: VanEck Morningstar Dividend Leaders (TDIV) + SPDR Euro Dividend Aristocrats. "
+            "**Yield stimato** — verificare su Yahoo Finance / emittente prima di investire."
+        )
+
+        # Filtro per paese
+        paesi = ["Tutti"] + sorted(df_div["paese"].unique().tolist())
+        col_p, col_s = st.columns(2)
+        paese_filter = col_p.selectbox("Filtra per paese", paesi, key="div_paese")
+        settore_filter = col_s.selectbox(
+            "Filtra per settore",
+            ["Tutti"] + sorted(df_div["settore"].unique().tolist()),
+            key="div_settore",
+        )
+        df_div_show = df_div.copy()
+        if paese_filter != "Tutti":
+            df_div_show = df_div_show[df_div_show["paese"] == paese_filter]
+        if settore_filter != "Tutti":
+            df_div_show = df_div_show[df_div_show["settore"] == settore_filter]
+
+        st.dataframe(
+            df_div_show,
+            use_container_width=True, hide_index=True,
+            column_config={
+                "isin":          st.column_config.TextColumn("ISIN", width="small"),
+                "ticker":        st.column_config.TextColumn("Ticker", width="small"),
+                "nome":          st.column_config.TextColumn("Azienda", width="medium"),
+                "settore":       st.column_config.TextColumn("Settore"),
+                "paese":         st.column_config.TextColumn("Paese", width="small"),
+                "div_yield_est": st.column_config.NumberColumn(
+                    "Yield % (stima)", format="%.1f%%",
+                    help="Dividend yield stimato — fonte: ETF holdings TDIV/EUDV. Verificare su Yahoo Finance."),
+                "classificazione": None,
+            },
+        )
+
+        to_add_div = st.multiselect(
+            "Aggiungi alla selezione",
+            options=df_div_show["isin"].tolist(),
+            format_func=lambda x: f"{x} — {DIVIDEND_STOCKS.get(x,{}).get('nome',x)} ({DIVIDEND_STOCKS.get(x,{}).get('ticker','')})",
+            key="ms_div",
+        )
+        if st.button("➕ Aggiungi selezionati", key="add_div"):
+            for isin in to_add_div:
+                if isin not in st.session_state["fe_selected_isins"]:
+                    st.session_state["fe_selected_isins"].append(isin)
+                if isin not in _all_fund_pool:
+                    info = DIVIDEND_STOCKS[isin]
+                    _all_fund_pool[isin] = {
+                        "isin": isin,
+                        "nome": info["nome"],
+                        "classificazione": f"Azione Dividendo — {info['settore']} ({info['paese']})",
+                        "ticker": info["ticker"],
+                    }
+            st.rerun()
     with fe_tab_isin:
         st.markdown("""
 **Inserisci ISIN o ticker — uno per riga.**

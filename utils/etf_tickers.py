@@ -8,16 +8,33 @@ Ticker verificati su finance.yahoo.com (suffisso .MI = Borsa Milano, .L = Londra
 def lookup_asset(isin: str) -> dict | None:
     """
     Dato un ISIN ritorna dict con ticker, nome, settore se noto.
-    Cerca prima in ITALIAN_STOCKS, poi in ISIN_TO_TICKER (ETF).
+    Ordine: ITALIAN_STOCKS → DIVIDEND_STOCKS → ISIN_TO_TICKER (ETF).
     """
     isin = isin.strip().upper()
-    # Import lazy per evitare circolarità
-    from utils.etf_tickers import ITALIAN_STOCKS, ISIN_TO_TICKER, ETF_STATIC_MAP
     if isin in ITALIAN_STOCKS:
         return ITALIAN_STOCKS[isin]
+    if isin in DIVIDEND_STOCKS:
+        return DIVIDEND_STOCKS[isin]
     if isin in ISIN_TO_TICKER:
         return {"ticker": ISIN_TO_TICKER[isin], "nome": ETF_STATIC_MAP.get(isin, isin), "settore": "ETF"}
     return None
+
+
+def get_dividend_stocks_df() -> "pd.DataFrame":
+    """Ritorna DataFrame con i 30 titoli dividend non-USA."""
+    import pandas as pd
+    rows = []
+    for isin, info in DIVIDEND_STOCKS.items():
+        rows.append({
+            "isin":           isin,
+            "ticker":         info["ticker"],
+            "nome":           info["nome"],
+            "settore":        info["settore"],
+            "paese":          info["paese"],
+            "div_yield_est":  info["div_yield_est"],
+            "classificazione":"Azione — Dividendo",
+        })
+    return pd.DataFrame(rows)
 
 # Formato: ISIN: "TICKER" (mercato principale per volume EUR)
 ISIN_TO_TICKER: dict[str, str] = {
@@ -219,6 +236,61 @@ TER_VERIFIED: dict[str, float] = {
     "GB00B15KYG56": 0.49,  "GB00B15KYH63": 0.49,  "IE00B53H0131": 0.34,
     "IE00BFXR6159": 0.30,  "GB00B15KXV33": 0.49,  "JE00B78CGV99": 0.49,
 }
+
+# ---------------------------------------------------------------------------
+# TOP 30 AZIONI NON-USA AD ALTO DIVIDENDO
+# Fonte: VanEck Morningstar Developed Markets Dividend Leaders (TDIV)
+#        + SPDR S&P Euro Dividend Aristocrats (EUDV)
+#        + iShares STOXX Global Select Dividend 100
+# ISIN e ticker verificati su Borsa Italiana / Euronext / LSE (giugno 2025)
+# ---------------------------------------------------------------------------
+
+DIVIDEND_STOCKS: dict[str, dict] = {
+    # ── GERMANIA ────────────────────────────────────────────────────────────
+    "DE0008404005": {"ticker": "ALV.DE",  "nome": "Allianz SE",           "settore": "Assicurativo",  "paese": "DE", "div_yield_est": 5.2},
+    "DE0008430026": {"ticker": "MUV2.DE", "nome": "Munich Re",            "settore": "Assicurativo",  "paese": "DE", "div_yield_est": 3.8},
+    "DE000BASF111": {"ticker": "BAS.DE",  "nome": "BASF SE",              "settore": "Chimico",       "paese": "DE", "div_yield_est": 5.8},
+    "DE0007236101": {"ticker": "SIE.DE",  "nome": "Siemens AG",           "settore": "Industriale",   "paese": "DE", "div_yield_est": 2.8},
+    "DE0005557508": {"ticker": "DTE.DE",  "nome": "Deutsche Telekom",     "settore": "Tlc",           "paese": "DE", "div_yield_est": 3.5},
+    # ── FRANCIA ─────────────────────────────────────────────────────────────
+    "FR0000131104": {"ticker": "BNP.PA",  "nome": "BNP Paribas",          "settore": "Bancario",      "paese": "FR", "div_yield_est": 7.2},
+    "FR0000120628": {"ticker": "AXA.PA",  "nome": "AXA SA",               "settore": "Assicurativo",  "paese": "FR", "div_yield_est": 6.0},
+    "FR0000120271": {"ticker": "TTE.PA",  "nome": "TotalEnergies",        "settore": "Energia",       "paese": "FR", "div_yield_est": 5.3},
+    "FR0000120578": {"ticker": "SAN.PA",  "nome": "Sanofi",               "settore": "Farmaceutico",  "paese": "FR", "div_yield_est": 3.5},
+    "FR0000125486": {"ticker": "DG.PA",   "nome": "Vinci SA",             "settore": "Infrastrutture","paese": "FR", "div_yield_est": 3.8},
+    "FR0010208488": {"ticker": "ENGI.PA", "nome": "Engie",                "settore": "Utilities",     "paese": "FR", "div_yield_est": 8.1},
+    # ── SVIZZERA ────────────────────────────────────────────────────────────
+    "CH0038863350": {"ticker": "NESN.SW", "nome": "Nestlé",               "settore": "Beni Consumo",  "paese": "CH", "div_yield_est": 3.7},
+    "CH0012221716": {"ticker": "NOVN.SW", "nome": "Novartis",             "settore": "Farmaceutico",  "paese": "CH", "div_yield_est": 3.5},
+    "CH0012032048": {"ticker": "ROG.SW",  "nome": "Roche Holding",        "settore": "Farmaceutico",  "paese": "CH", "div_yield_est": 3.9},
+    "CH0011075394": {"ticker": "ZURN.SW", "nome": "Zurich Insurance",     "settore": "Assicurativo",  "paese": "CH", "div_yield_est": 5.2},
+    "CH0012317560": {"ticker": "ABBN.SW", "nome": "ABB Ltd",              "settore": "Industriale",   "paese": "CH", "div_yield_est": 2.4},
+    # ── REGNO UNITO ─────────────────────────────────────────────────────────
+    "GB00BP6MXD84": {"ticker": "SHEL.AS", "nome": "Shell plc",            "settore": "Energia",       "paese": "GB", "div_yield_est": 4.1},
+    "GB0007980591": {"ticker": "BP.L",    "nome": "BP plc",               "settore": "Energia",       "paese": "GB", "div_yield_est": 5.8},
+    "GB0005405286": {"ticker": "HSBA.L",  "nome": "HSBC Holdings",        "settore": "Bancario",      "paese": "GB", "div_yield_est": 7.0},
+    "GB0009252882": {"ticker": "GSK.L",   "nome": "GSK plc",              "settore": "Farmaceutico",  "paese": "GB", "div_yield_est": 4.3},
+    "GB00B10RZP78": {"ticker": "ULVR.L",  "nome": "Unilever",             "settore": "Beni Consumo",  "paese": "GB", "div_yield_est": 3.6},
+    "GB0002374006": {"ticker": "DGE.L",   "nome": "Diageo plc",           "settore": "Beni Consumo",  "paese": "GB", "div_yield_est": 3.4},
+    "GB0007188757": {"ticker": "RIO.L",   "nome": "Rio Tinto",            "settore": "Minerario",     "paese": "GB", "div_yield_est": 6.8},
+    "GB0005603997": {"ticker": "LGEN.L",  "nome": "Legal & General",      "settore": "Assicurativo",  "paese": "GB", "div_yield_est": 8.9},
+    # ── PAESI BASSI ─────────────────────────────────────────────────────────
+    "NL0010273215": {"ticker": "ASML.AS", "nome": "ASML Holding",         "settore": "Tecnologia",    "paese": "NL", "div_yield_est": 1.0},
+    "NL0000009165": {"ticker": "INGA.AS", "nome": "ING Groep",            "settore": "Bancario",      "paese": "NL", "div_yield_est": 7.5},
+    # ── SPAGNA ──────────────────────────────────────────────────────────────
+    "ES0113211835": {"ticker": "SAN.MC",  "nome": "Banco Santander",      "settore": "Bancario",      "paese": "ES", "div_yield_est": 5.6},
+    "ES0173516115": {"ticker": "IBE.MC",  "nome": "Iberdrola",            "settore": "Utilities",     "paese": "ES", "div_yield_est": 4.0},
+    # ── AUSTRALIA ───────────────────────────────────────────────────────────
+    "AU000000CBA7": {"ticker": "CBA.AX",  "nome": "Commonwealth Bank",    "settore": "Bancario",      "paese": "AU", "div_yield_est": 3.1},
+    # ── GIAPPONE ────────────────────────────────────────────────────────────
+    "JP3633400001": {"ticker": "8058.T",  "nome": "Mitsubishi Corp",      "settore": "Conglomerato",  "paese": "JP", "div_yield_est": 3.0},
+}
+
+# Aggiunge dividend stocks alla mappa principale
+for _isin, _data in DIVIDEND_STOCKS.items():
+    if _isin not in ISIN_TO_TICKER:
+        ISIN_TO_TICKER[_isin] = _data["ticker"]
+
 
 # Mappa ISIN→nome per ETF (usata da lookup_asset)
 ETF_STATIC_MAP: dict[str, str] = {
