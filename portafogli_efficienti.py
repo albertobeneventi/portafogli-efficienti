@@ -191,6 +191,22 @@ def init_session():
 init_session()
 
 
+# ── AUTO-REFRESH ETF (notifica se dati > 24h) ──────────────────────────────
+def _check_etf_auto_refresh():
+    from pathlib import Path as _P
+    _etf_f = _P("data/etf_universe.xlsx")
+    if not _etf_f.exists() or st.session_state.get("_etf_refresh_notified"):
+        return
+    _age_h = (datetime.now() -
+              datetime.fromtimestamp(_etf_f.stat().st_mtime)).total_seconds() / 3600
+    if _age_h > 24:
+        st.session_state["_etf_refresh_notified"] = True
+        st.toast("⏰ ETF Universe: dati aggiornati da >24h. "
+                 "Vai su ETF Universe → 🔄 per aggiornare.", icon="ℹ️")
+
+_check_etf_auto_refresh()
+
+
 # ---------------------------------------------------------------------------
 # SIDEBAR — FILE UPLOAD + NAVIGAZIONE
 # ---------------------------------------------------------------------------
@@ -270,13 +286,14 @@ with st.sidebar:
             "🏠 Home",
             "📈 Frontiera Efficiente",
             "⭐ Portafoglio Qualità",
+            "🔀 Comparatore",
             "🌐 ETF Universe",
             "⚙️ Impostazioni",
         ],
         label_visibility="collapsed",
     )
     st.markdown("---")
-    st.markdown("### Impostazioni rapide")
+    st.markdown("### ⚙️ Impostazioni rapide")
     st.session_state["risk_free_rate"] = st.slider(
         "Risk-free rate (%)", 0.0, 5.0,
         float(st.session_state["risk_free_rate"]), 0.1,
@@ -286,6 +303,80 @@ with st.sidebar:
         ["1Y", "3Y", "5Y"],
         index=["1Y", "3Y", "5Y"].index(st.session_state["opt_period"]),
     )
+
+    st.markdown("---")
+    # ── REBOOT CACHE ─────────────────────────────────────────────────────
+    with st.expander("🔁 Cache & Portafogli salvati"):
+        if st.button("🗑️ Svuota tutta la cache", use_container_width=True,
+                     help="Forza il ricaricamento di fondi, ETF e liste"):
+            _load_all_data.clear()
+            _load_preselection.clear()
+            _load_etf_universe_cached.clear()
+            # Rimuovi chiavi di risultato dall'optimizer
+            for _k in ["fe_result","fe_price_dict","bl_result","fe_selected_isins",
+                        "fe_ac_map","fe_ac_target"]:
+                st.session_state.pop(_k, None)
+            st.toast("✅ Cache svuotata — pagina in ricarica")
+            st.rerun()
+
+        st.markdown("---")
+        # ── SALVATAGGIO PORTAFOGLIO ───────────────────────────────────────
+        import json as _json
+        st.caption("**Salva / Carica portafoglio**")
+
+        def _build_save_payload() -> dict:
+            """Serializza lo stato corrente dei portafogli in JSON."""
+            payload = {
+                "version": "1.0",
+                "saved_at": datetime.now().isoformat(),
+                "fe_selected_isins": st.session_state.get("fe_selected_isins", []),
+                "fe_ac_target": st.session_state.get("fe_ac_target", {}),
+                "fe_ac_map": st.session_state.get("fe_ac_map", {}),
+                "profilo": st.session_state.get("profilo", "Equilibrato"),
+                "fondi_per_bucket": st.session_state.get("fondi_per_bucket", 4),
+                "risk_free_rate": st.session_state.get("risk_free_rate", 2.5),
+                "opt_period": st.session_state.get("opt_period", "3Y"),
+                "min_weight": st.session_state.get("min_weight", 3),
+                "max_weight": st.session_state.get("max_weight", 30),
+                "pq_locks": list(st.session_state.get("pq_locks", set())),
+                "pq_replacements": st.session_state.get("pq_replacements", {}),
+            }
+            # Includi pesi Max Sharpe se disponibili
+            fe_res = st.session_state.get("fe_result", {})
+            ms = fe_res.get("max_sharpe", {})
+            if ms and "error" not in ms:
+                payload["last_portfolio_weights"] = dict(ms["weights"])
+                payload["last_portfolio_metrics"] = {
+                    "ret": ms.get("ret"), "vol": ms.get("vol"), "sharpe": ms.get("sharpe")
+                }
+            return payload
+
+        save_json = _json.dumps(_build_save_payload(), indent=2, ensure_ascii=False)
+        st.download_button(
+            "💾 Scarica portafoglio (.json)",
+            data=save_json.encode("utf-8"),
+            file_name=f"portafoglio_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+        up_portfolio = st.file_uploader("📂 Carica portafoglio salvato",
+                                         type=["json"], key="up_portfolio")
+        if up_portfolio and st.button("↩️ Ripristina", use_container_width=True):
+            try:
+                payload = _json.loads(up_portfolio.getvalue().decode("utf-8"))
+                for k in ["fe_selected_isins","fe_ac_target","fe_ac_map",
+                           "profilo","fondi_per_bucket","risk_free_rate",
+                           "opt_period","min_weight","max_weight",
+                           "pq_replacements"]:
+                    if k in payload:
+                        st.session_state[k] = payload[k]
+                if "pq_locks" in payload:
+                    st.session_state["pq_locks"] = set(payload["pq_locks"])
+                st.toast(f"✅ Portafoglio del {payload.get('saved_at','?')[:10]} ripristinato")
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Errore nel caricamento: {_e}")
 
 
 # ===========================================================================
@@ -1038,6 +1129,12 @@ elif nav == "⭐ Portafoglio Qualità":
                 use_container_width=True, hide_index=True)
             st.caption("Se un bucket è vuoto: le classificazioni inferite non matchano le keyword. Apri per diagnosticare.")
 
+    # ── STATO LOCK / SOSTITUZIONI ───────────────────────────────────────────
+    if "pq_locks" not in st.session_state:
+        st.session_state["pq_locks"] = set()
+    if "pq_replacements" not in st.session_state:
+        st.session_state["pq_replacements"] = {}   # {(bucket, isin_old): isin_new}
+
     # ── COSTRUZIONE PORTAFOGLIO ─────────────────────────────────────────────
     with st.spinner("Costruzione portafoglio per Score Qualità..."):
         portfolio_buckets = build_portfolio_quality(
@@ -1078,21 +1175,98 @@ elif nav == "⭐ Portafoglio Qualità":
         if "nome" in display.columns:
             display["nome"] = display["nome"].astype(str).str[:60]
 
+        # Lock indicator
+        locked_in_bucket = [i for i in st.session_state["pq_locks"]
+                            if any(df_bucket["isin"] == i)]
+        if locked_in_bucket:
+            st.caption(f"🔒 Bloccati: {', '.join(locked_in_bucket)}")
+
+        _pq_col_cfg = {
+            "isin": st.column_config.TextColumn("ISIN", width="small"),
+            "nome": st.column_config.TextColumn("Fondo", width="large"),
+            "classificazione": st.column_config.TextColumn("Classificazione"),
+            "casa": st.column_config.TextColumn("Casa"),
+            "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
+            "perf_3y": st.column_config.NumberColumn("Perf 3Y %", format="%.2f"),
+            "volatilita": st.column_config.NumberColumn("Vol %", format="%.2f"),
+            "rating_fida": st.column_config.NumberColumn("★ FIDA", format="%d"),
+            "score_qualita": st.column_config.ProgressColumn(
+                "Score", min_value=0, max_value=20, format="%.2f"),
+            "_peso_fondo": st.column_config.NumberColumn("Peso %", format="%.1f"),
+            "retrocessione": st.column_config.NumberColumn("Retro %", format="%.2f"),
+        }
         st.dataframe(display, use_container_width=True, hide_index=True,
-                     column_config={
-                         "isin": st.column_config.TextColumn("ISIN", width="small"),
-                         "nome": st.column_config.TextColumn("Fondo", width="large"),
-                         "classificazione": st.column_config.TextColumn("Classificazione"),
-                         "casa": st.column_config.TextColumn("Casa"),
-                         "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
-                         "perf_3y": st.column_config.NumberColumn("Perf 3Y %", format="%.2f"),
-                         "volatilita": st.column_config.NumberColumn("Vol %", format="%.2f"),
-                         "rating_fida": st.column_config.NumberColumn("★ FIDA", format="%d"),
-                         "score_qualita": st.column_config.ProgressColumn(
-                             "Score", min_value=0, max_value=20, format="%.2f"),
-                         "_peso_fondo": st.column_config.NumberColumn("Peso %", format="%.1f"),
-                         "retrocessione": st.column_config.NumberColumn("Retro %", format="%.2f"),
-                     })
+                     column_config=_pq_col_cfg)
+
+        # ── LOCK / SOSTITUZIONE ──────────────────────────────────────────
+        with st.expander(f"🔄 Sostituisci / Blocca fondo — {bucket}", expanded=False):
+            _bucket_isins = df_bucket["isin"].tolist() if "isin" in df_bucket.columns else []
+            _bk = bucket.replace(" ", "_")
+
+            # Lock
+            _lock_sel = st.multiselect(
+                "🔒 Blocca fondi (rimangono indipendentemente dallo score)",
+                options=_bucket_isins,
+                default=[i for i in _bucket_isins if i in st.session_state["pq_locks"]],
+                format_func=lambda x: f"{x} — {str(df_unified[df_unified['isin']==x]['nome'].values[0])[:45] if not df_unified[df_unified['isin']==x].empty else x}",
+                key=f"pq_lock_{_bk}",
+            )
+            if st.button("Salva lock", key=f"save_lock_{_bk}", use_container_width=False):
+                for i in _bucket_isins:
+                    st.session_state["pq_locks"].discard(i)
+                st.session_state["pq_locks"].update(_lock_sel)
+                st.toast(f"🔒 Lock aggiornati per {bucket}")
+                st.rerun()
+
+            st.markdown("---")
+            # Sostituzione manuale
+            st.caption("Sostituisci un fondo con uno dalla classifica completa del bucket:")
+            # Costruisci classifica completa del bucket
+            from utils.scoring import compute_scores_df
+            from utils.constraints import classify_bucket as _cb
+            _full_bucket_df = df_unified.copy()
+            _full_bucket_df["_bucket_tmp"] = _full_bucket_df["classificazione"].apply(_cb)
+            _full_bucket_df = _full_bucket_df[_full_bucket_df["_bucket_tmp"] == bucket].copy()
+            _full_bucket_df = compute_scores_df(_full_bucket_df)
+            _full_bucket_df = _full_bucket_df.sort_values("score_qualita", ascending=False)
+
+            if not _full_bucket_df.empty:
+                _sub_c1, _sub_c2 = st.columns(2)
+                _isin_out = _sub_c1.selectbox(
+                    "Fondo da rimuovere",
+                    options=_bucket_isins,
+                    format_func=lambda x: f"{x} — {str(df_unified[df_unified['isin']==x]['nome'].values[0])[:40] if not df_unified[df_unified['isin']==x].empty else x}",
+                    key=f"pq_out_{_bk}",
+                )
+                _alternatives = _full_bucket_df[
+                    ~_full_bucket_df["isin"].isin(_bucket_isins)
+                ]["isin"].tolist()[:30]
+                _isin_in = _sub_c2.selectbox(
+                    "Sostituisci con",
+                    options=_alternatives,
+                    format_func=lambda x: f"{x} — {str(_full_bucket_df[_full_bucket_df['isin']==x]['nome'].values[0])[:40] if not _full_bucket_df[_full_bucket_df['isin']==x].empty else x}",
+                    key=f"pq_in_{_bk}",
+                ) if _alternatives else None
+
+                if _isin_in and st.button(
+                    f"↔️ Sostituisci", key=f"pq_sub_{_bk}", type="primary"):
+                    st.session_state["pq_replacements"][(bucket, _isin_out)] = _isin_in
+                    st.toast(f"✅ {_isin_out} → {_isin_in} nel bucket {bucket}")
+                    st.rerun()
+
+                # Mostra sostituzioni attive
+                active_subs = {k: v for k, v in st.session_state["pq_replacements"].items()
+                               if k[0] == bucket}
+                if active_subs:
+                    st.caption("Sostituzioni attive:")
+                    for (_, old), new in active_subs.items():
+                        sc1, sc2 = st.columns([4, 1])
+                        sc1.markdown(f"~~{old}~~ → **{new}**")
+                        if sc2.button("✕", key=f"rm_sub_{old}_{_bk}"):
+                            del st.session_state["pq_replacements"][(bucket, old)]
+                            st.rerun()
+            else:
+                st.info("Non ci sono fondi alternativi disponibili per questo bucket.")
 
         # Grafico score orizzontale
         if "score_qualita" in df_bucket.columns and len(df_bucket) > 0:
@@ -1196,6 +1370,152 @@ elif nav == "⭐ Portafoglio Qualità":
 
 
 # ===========================================================================
+# COMPARATORE PORTAFOGLI
+# ===========================================================================
+elif nav == "🔀 Comparatore":
+    st.title("🔀 Comparatore Portafogli")
+    st.markdown(
+        "Confronta fianco a fianco Max Sharpe, Min Varianza, Portafoglio Qualità "
+        "e un portafoglio personalizzato."
+    )
+
+    # Raccoglie portafogli disponibili
+    _comp_portfolios: dict[str, dict] = {}
+
+    fe_res = st.session_state.get("fe_result", {})
+    if fe_res.get("max_sharpe") and "error" not in fe_res["max_sharpe"]:
+        _comp_portfolios["Max Sharpe"] = fe_res["max_sharpe"]
+    if fe_res.get("min_variance") and "error" not in fe_res["min_variance"]:
+        _comp_portfolios["Min Varianza"] = fe_res["min_variance"]
+    if st.session_state.get("bl_result") and "error" not in st.session_state["bl_result"]:
+        _comp_portfolios["Black-Litterman"] = st.session_state["bl_result"]
+
+    # Portafoglio Qualità — costruito al volo se dati disponibili
+    if not df_unified.empty:
+        try:
+            _pq_buckets = build_portfolio_quality(
+                df_unified, profilo=st.session_state.get("profilo","Equilibrato"),
+                fondi_per_bucket=st.session_state.get("fondi_per_bucket",4)
+            )
+            _pq_weights = {}
+            for _bk, _bdf in _pq_buckets.items():
+                if _bdf is not None and not _bdf.empty:
+                    for _, _r in _bdf.iterrows():
+                        _pq_weights[_r.get("isin","")] = (_r.get("_peso_fondo",0) or 0) / 100
+            if _pq_weights:
+                _comp_portfolios["Qualità"] = {"weights": _pq_weights, "ret": None, "vol": None, "sharpe": None}
+        except Exception:
+            pass
+
+    if not _comp_portfolios:
+        st.info(
+            "Nessun portafoglio calcolato ancora. "
+            "Vai su **Frontiera Efficiente** e calcola almeno un portafoglio, "
+            "oppure usa **Portafoglio Qualità**."
+        )
+    else:
+        st.success(f"Portafogli disponibili: {', '.join(_comp_portfolios.keys())}")
+
+        # ── TABELLA METRICHE ─────────────────────────────────────────────
+        st.subheader("📊 Metriche a confronto")
+        metrics_rows = []
+        for pname, pdata in _comp_portfolios.items():
+            n_assets = sum(1 for v in pdata["weights"].values() if v and v > 0.001)
+            metrics_rows.append({
+                "Portafoglio": pname,
+                "Rendimento atteso %": round(pdata["ret"]*100, 2) if pdata.get("ret") else "—",
+                "Volatilità %":        round(pdata["vol"]*100, 2) if pdata.get("vol") else "—",
+                "Sharpe Ratio":        round(pdata["sharpe"], 3)  if pdata.get("sharpe") else "—",
+                "N. asset":            n_assets,
+            })
+        st.dataframe(pd.DataFrame(metrics_rows), use_container_width=True, hide_index=True)
+
+        # ── PESI AFFIANCATI ──────────────────────────────────────────────
+        st.subheader("⚖️ Composizione a confronto")
+        n_cols = len(_comp_portfolios)
+        comp_cols = st.columns(n_cols)
+
+        # Pool nomi
+        _pool_names: dict = {}
+        try:
+            from utils.etf_tickers import ITALIAN_STOCKS, DIVIDEND_STOCKS, ISIN_TO_TICKER
+            from utils.etf_static import ETF_STATIC as _ESL
+            for e in _ESL: _pool_names[e["isin"]] = e["nome"]
+            for i, d in ITALIAN_STOCKS.items(): _pool_names[i] = d["nome"]
+            for i, d in DIVIDEND_STOCKS.items(): _pool_names[i] = d["nome"]
+            if not df_unified.empty:
+                for _, r in df_unified.iterrows():
+                    if r.get("isin"): _pool_names[r["isin"]] = str(r.get("nome",""))[:45]
+        except Exception:
+            pass
+
+        for col, (pname, pdata) in zip(comp_cols, _comp_portfolios.items()):
+            w = {k: v for k, v in pdata["weights"].items() if v and v > 0.001}
+            w_rows = [{"Nome": _pool_names.get(isin, isin)[:35], "Peso %": round(v*100,1)}
+                      for isin, v in sorted(w.items(), key=lambda x: -x[1])]
+            with col:
+                st.markdown(f"**{pname}**")
+                st.dataframe(pd.DataFrame(w_rows), use_container_width=True,
+                             hide_index=True, height=300)
+                fig_c = px.pie(pd.DataFrame(w_rows), values="Peso %", names="Nome",
+                               hole=0.35, color_discrete_sequence=px.colors.sequential.Blues_r)
+                fig_c.update_layout(height=250, margin=dict(l=0,r=0,t=0,b=0),
+                                    showlegend=False)
+                fig_c.update_traces(textposition="inside", textinfo="percent",
+                                    textfont_size=9)
+                st.plotly_chart(fig_c, use_container_width=True)
+
+        # ── GRAFICO RADAR METRICHE ────────────────────────────────────────
+        _quant = [(n, d) for n, d in _comp_portfolios.items()
+                  if d.get("ret") and d.get("vol") and d.get("sharpe")]
+        if len(_quant) >= 2:
+            st.subheader("🎯 Radar: rendimento vs rischio vs sharpe")
+            fig_rad = go.Figure()
+            cats = ["Rendimento %", "1/Volatilità (sicurezza)", "Sharpe"]
+            max_r  = max(d["ret"]*100 for _, d in _quant) or 1
+            max_sh = max(d["sharpe"]  for _, d in _quant) or 1
+            min_v  = min(d["vol"]*100 for _, d in _quant) or 0.01
+
+            for pname, pdata in _quant:
+                vals = [
+                    pdata["ret"]*100 / max_r * 10,
+                    min_v / (pdata["vol"]*100) * 10,
+                    pdata["sharpe"] / max_sh * 10,
+                ]
+                fig_rad.add_trace(go.Scatterpolar(
+                    r=vals + [vals[0]], theta=cats + [cats[0]],
+                    fill="toself", name=pname, opacity=0.7,
+                ))
+            fig_rad.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
+                showlegend=True, height=380,
+            )
+            st.plotly_chart(fig_rad, use_container_width=True)
+
+        # ── EXPORT COMPARATORE ────────────────────────────────────────────
+        st.markdown("---")
+        if st.button("📥 Esporta confronto Excel"):
+            import io as _io
+            buf = _io.BytesIO()
+            with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                pd.DataFrame(metrics_rows).to_excel(writer, sheet_name="Metriche", index=False)
+                for pname, pdata in _comp_portfolios.items():
+                    w = {k: v for k, v in pdata["weights"].items() if v and v > 0.001}
+                    w_df = pd.DataFrame([
+                        {"ISIN": k, "Nome": _pool_names.get(k,k)[:45], "Peso %": round(v*100,2)}
+                        for k, v in sorted(w.items(), key=lambda x: -x[1])
+                    ])
+                    sheet_name = pname[:31]
+                    w_df.to_excel(writer, sheet_name=sheet_name, index=False)
+            st.download_button(
+                "📥 Scarica confronto",
+                data=buf.getvalue(),
+                file_name=f"confronto_portafogli_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+
+# ===========================================================================
 # ETF UNIVERSE
 # ===========================================================================
 elif nav == "🌐 ETF Universe":
@@ -1229,15 +1549,24 @@ elif nav == "🌐 ETF Universe":
     tb1.caption(f"**{len(df_etf)} ETF** in lista · TER verificato: 85/85 · Perf yfinance: {perf_ok}/85")
 
     if tb2.button("🔄 Aggiorna rendimenti (yfinance)", use_container_width=True):
-        with st.spinner("Download prezzi da Yahoo Finance (~2 min)…"):
-            _load_etf_universe_cached.clear()
-            from utils.etf_fetcher import _build_from_yfinance_and_static
-            import os
-            from pathlib import Path as _P
-            cache = _P("data/etf_universe.xlsx")
-            if cache.exists(): os.remove(cache)
-            df_etf = _build_from_yfinance_and_static()
-        st.success(f"Aggiornati: {int(df_etf['perf_1y'].notna().sum())}/85 con dati reali")
+        _load_etf_universe_cached.clear()
+        from utils.etf_fetcher import _build_from_yfinance_and_static
+        import os
+        from pathlib import Path as _P
+        cache_f = _P("data/etf_universe.xlsx")
+        if cache_f.exists(): os.remove(cache_f)
+
+        prog_bar  = st.progress(0.0, text="Inizializzazione…")
+        prog_text = st.empty()
+
+        def _etf_progress(pct: float, msg: str):
+            prog_bar.progress(min(pct, 1.0), text=msg)
+            prog_text.caption(msg)
+
+        df_etf = _build_from_yfinance_and_static(progress_callback=_etf_progress)
+        prog_bar.empty(); prog_text.empty()
+        ok = int(df_etf["perf_1y"].notna().sum()) if "perf_1y" in df_etf.columns else 0
+        st.success(f"✅ Completato: {ok}/85 ETF con dati reali da yfinance")
         st.rerun()
 
     with tb3.expander("➕ Aggiungi ISIN"):

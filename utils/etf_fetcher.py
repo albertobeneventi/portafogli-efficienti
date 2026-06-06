@@ -310,7 +310,7 @@ def fetch_etf_universe(
     return df
 
 
-def _build_from_yfinance_and_static(extra_isins=None) -> pd.DataFrame:
+def _build_from_yfinance_and_static(extra_isins=None, progress_callback=None) -> pd.DataFrame:
     """
     Costruisce Lista C combinando:
     - Dataset statico (nomi, categorie, TER verificati)
@@ -338,27 +338,48 @@ def _build_from_yfinance_and_static(extra_isins=None) -> pd.DataFrame:
             tickers_to_fetch.append(ticker)
             isin_by_ticker[ticker] = isin
 
-    # Fetch batch yfinance (1 chiamata per tutti i ticker)
+    # Fetch yfinance in batch da BATCH_SIZE ticker alla volta
+    BATCH_SIZE = 15
     yf_data = {}
-    if tickers_to_fetch:
+    total_batches = max(1, (len(tickers_to_fetch) + BATCH_SIZE - 1) // BATCH_SIZE)
+
+    for batch_idx in range(0, len(tickers_to_fetch), BATCH_SIZE):
+        batch = tickers_to_fetch[batch_idx: batch_idx + BATCH_SIZE]
+        if progress_callback:
+            pct = batch_idx / max(1, len(tickers_to_fetch))
+            done = batch_idx // BATCH_SIZE + 1
+            progress_callback(pct, f"Batch {done}/{total_batches}: {', '.join(batch[:3])}…")
         try:
-            tickers_str = " ".join(tickers_to_fetch)
+            tickers_str = " ".join(batch)
             hist = yf.download(tickers_str, period="5y", interval="1mo",
-                               auto_adjust=True, progress=False, threads=True)
-            close = hist["Close"] if "Close" in hist.columns else hist
-            # Calcola rendimenti annuali da serie mensile
-            for ticker in tickers_to_fetch:
-                if ticker in close.columns:
-                    s = close[ticker].dropna()
-                    if len(s) >= 12:
-                        p1y = (s.iloc[-1] / s.iloc[-13] - 1) * 100 if len(s) >= 13 else None
-                        p3y = (s.iloc[-1] / s.iloc[-37] - 1) * 100 / 3 if len(s) >= 37 else None
-                        p5y = (s.iloc[-1] / s.iloc[-61] - 1) * 100 / 5 if len(s) >= 61 else None
-                        yf_data[ticker] = {"perf_1y": round(p1y, 2) if p1y else None,
-                                           "perf_3y": round(p3y, 2) if p3y else None,
-                                           "perf_5y": round(p5y, 2) if p5y else None}
+                               auto_adjust=True, progress=False, threads=False)
+            # Gestisci sia MultiIndex (più ticker) che Index semplice (1 ticker)
+            if hasattr(hist.columns, "levels"):
+                close = hist["Close"] if "Close" in hist.columns.get_level_values(0) else hist
+            else:
+                close = hist[["Close"]] if "Close" in hist.columns else hist
+                if len(batch) == 1:
+                    close.columns = batch
+
+            for ticker in batch:
+                col = ticker if ticker in close.columns else None
+                if col is None:
+                    continue
+                s = close[col].dropna()
+                if len(s) >= 12:
+                    p1y = (s.iloc[-1] / s.iloc[-13] - 1) * 100 if len(s) >= 13 else None
+                    p3y = (s.iloc[-1] / s.iloc[-37] - 1) * 100 / 3 if len(s) >= 37 else None
+                    p5y = (s.iloc[-1] / s.iloc[-61] - 1) * 100 / 5 if len(s) >= 61 else None
+                    yf_data[ticker] = {
+                        "perf_1y": round(p1y, 2) if p1y is not None else None,
+                        "perf_3y": round(p3y, 2) if p3y is not None else None,
+                        "perf_5y": round(p5y, 2) if p5y is not None else None,
+                    }
         except Exception:
-            pass  # fallback silenzioso
+            pass  # batch fallito, continua con il successivo
+
+    if progress_callback:
+        progress_callback(1.0, "Download completato")
 
     for isin in all_isins:
         base = static_map.get(isin, {})
