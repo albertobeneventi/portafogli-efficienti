@@ -2195,50 +2195,70 @@ elif nav == "⭐ Portafoglio Qualità":
 
         _az_need = int(n_min_az_pq) - len(_az_in_pq)
 
+        # Bucket disponibili nel portafoglio corrente
+        _available_buckets = [k for k, v in portfolio_buckets.items()
+                               if v is not None and not v.empty]
+
         if _az_need > 0 and _pq_az_ranked:
-            # Per ogni fondo Azimut mancante, trova il bucket più adatto
-            # e aggiunge il fondo (sostituendo l'ultimo per score se bucket pieno)
             _added_az = 0
             for _az_isin in _pq_az_ranked:
                 if _added_az >= _az_need:
                     break
                 if _az_isin in _az_in_pq:
                     continue
-                # Trova la classificazione del fondo e il bucket corrispondente
+
                 _az_row = _az_src_pq[_az_src_pq["isin"] == _az_isin]
                 if _az_row.empty:
                     continue
+
                 _az_class = str(_az_row.iloc[0].get("classificazione", ""))
                 _az_bucket = classify_bucket(_az_class)
-                if _az_bucket == "Altro":
-                    _az_bucket = "Azionario"  # default bucket
 
-                # Crea entry fondo Azimut
+                # Se il bucket non esiste nel portafoglio, scegli il più vicino disponibile
+                if _az_bucket not in _available_buckets or _az_bucket == "Altro":
+                    # Priorità: Azionario > Obbligazionario > Bilanciato > primo disponibile
+                    for _fallback in ["Azionario", "Obbligazionario", "Bilanciato"]:
+                        if _fallback in _available_buckets:
+                            _az_bucket = _fallback
+                            break
+                    else:
+                        _az_bucket = _available_buckets[0] if _available_buckets else "Azionario"
+
+                # Crea entry fondo Azimut con colonne minime necessarie
                 _az_entry = _az_row.iloc[0].to_dict()
-                _az_entry["_peso_fondo"] = alloc_adj.get(_az_bucket, 10) / (fondi_per_bucket + 1)
                 _az_entry["_peso_bucket"] = alloc_adj.get(_az_bucket, 10)
                 _az_df_new = pd.DataFrame([_az_entry])
 
+                # Aggiunge al bucket e ricalcola pesi equi
                 if _az_bucket in portfolio_buckets and portfolio_buckets[_az_bucket] is not None:
                     _existing = portfolio_buckets[_az_bucket]
-                    # Aggiunge in cima (score Azimut potrebbe non essere top ma è richiesto)
-                    portfolio_buckets[_az_bucket] = pd.concat(
-                        [_az_df_new, _existing], ignore_index=True
-                    ).drop_duplicates(subset=["isin"])
-                    # Ricalcola pesi equi
-                    _n_new = len(portfolio_buckets[_az_bucket])
-                    portfolio_buckets[_az_bucket]["_peso_fondo"] = round(
-                        alloc_adj.get(_az_bucket, 10) / _n_new, 1
-                    )
+                    _combined = pd.concat([_az_df_new, _existing], ignore_index=True)
+                    _combined = _combined.drop_duplicates(subset=["isin"])
+                    _n_new = len(_combined)
+                    _combined["_peso_fondo"] = round(alloc_adj.get(_az_bucket, 10) / _n_new, 1)
+                    portfolio_buckets[_az_bucket] = _combined
+                    if _az_bucket not in _available_buckets:
+                        _available_buckets.append(_az_bucket)
                 else:
+                    _az_df_new["_peso_fondo"] = alloc_adj.get(_az_bucket, 10)
                     portfolio_buckets[_az_bucket] = _az_df_new
+                    _available_buckets.append(_az_bucket)
 
                 _az_in_pq.add(_az_isin)
                 _added_az += 1
 
             if _added_az > 0:
-                st.info(f"🔵 Aggiunti {_added_az} fondi Azimut come richiesto"
-                        f" (totale Azimut nel portafoglio: {len(_az_in_pq)})")
+                _az_names = [str(_az_src_pq[_az_src_pq["isin"]==i]["nome"].values[0])[:30]
+                             if not _az_src_pq[_az_src_pq["isin"]==i].empty else i
+                             for i in list(_az_in_pq)[:3]]
+                st.info(
+                    f"🔵 **{_added_az} fondi Azimut aggiunti** al portafoglio: "
+                    f"{', '.join(_az_names)}"
+                    + (f" e altri {len(_az_in_pq)-3}" if len(_az_in_pq) > 3 else "")
+                )
+            elif n_min_az_pq > 0:
+                st.warning(f"⚠️ Richiesti {n_min_az_pq} fondi Azimut ma catalogo vuoto o "
+                           f"file non caricato. Carica il file Azimut dalla sidebar.")
 
     # ── VISUALIZZAZIONE BUCKET PER BUCKET ──────────────────────────────────
     BUCKET_COLORS = {

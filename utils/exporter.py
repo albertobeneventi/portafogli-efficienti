@@ -19,9 +19,36 @@ try:
         SimpleDocTemplate, Table, TableStyle, Paragraph,
         Spacer, Image, HRFlowable, KeepTogether,
     )
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import os as _os
+
+    # Registra font Unicode — supporta stelle e accenti italiani
+    _FONT_NAME = "Helvetica"
+    _FONT_BOLD = "Helvetica-Bold"
+    _unicode_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",      # Linux (Streamlit Cloud)
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "C:/Windows/Fonts/calibri.ttf",                          # Windows
+        "C:/Windows/Fonts/arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",                   # macOS
+    ]
+    for _fp in _unicode_paths:
+        if _os.path.exists(_fp):
+            try:
+                pdfmetrics.registerFont(TTFont("UniFont", _fp))
+                _FONT_NAME = "UniFont"
+                _FONT_BOLD = "UniFont"
+                break
+            except Exception:
+                pass
+
     HAS_REPORTLAB = True
 except ImportError:
     HAS_REPORTLAB = False
+    _FONT_NAME = "Helvetica"
+    _FONT_BOLD = "Helvetica-Bold"
 
 try:
     import openpyxl
@@ -29,18 +56,17 @@ try:
 except ImportError:
     HAS_OPENPYXL = False
 
-NAVY      = "#1A2C54"
-NAVY_RL   = colors.HexColor(NAVY)
-GRAY_LIGHT = colors.HexColor("#F5F7FA")
-GRAY_MID   = colors.HexColor("#E2E8F0")
+NAVY     = "#1A2C54"
+NAVY_RL  = colors.HexColor(NAVY) if HAS_REPORTLAB else None
+GRAY_LIGHT = colors.HexColor("#F5F7FA") if HAS_REPORTLAB else None
+GRAY_MID   = colors.HexColor("#E2E8F0") if HAS_REPORTLAB else None
 
 
 # ---------------------------------------------------------------------------
-# HELPER: converti figura Plotly → PNG bytes
+# HELPER: converti figura Plotly in PNG bytes
 # ---------------------------------------------------------------------------
 
 def plotly_to_png(fig, width: int = 1100, height: int = 550) -> Optional[bytes]:
-    """Converte un oggetto go.Figure in bytes PNG via kaleido."""
     try:
         return fig.to_image(format="png", width=width, height=height, scale=2)
     except Exception:
@@ -53,17 +79,48 @@ def plotly_to_png(fig, width: int = 1100, height: int = 550) -> Optional[bytes]:
 
 
 # ---------------------------------------------------------------------------
-# HELPER: stelle FIDA come stringa
+# HELPER: pulizia testo per PDF Helvetica (non-Unicode)
+# ---------------------------------------------------------------------------
+
+def _safe_str(text: str) -> str:
+    """Converte stringa in formato sicuro per Helvetica (ASCII + Latin-1)."""
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
+    if _FONT_NAME != "Helvetica":
+        return text          # font Unicode → nessuna conversione
+    _MAP = {
+        "★": "*", "☆": "o",   # ★ ☆
+        "€": "EUR",                 # €
+        "–": "-", "—": "-",   # en-dash, em-dash
+        "‘": "'", "’": "'",   # curly quotes
+        "“": '"', "”": '"',
+        "\xe0": "a", "\xe8": "e", "\xe9": "e",
+        "\xec": "i", "\xf2": "o", "\xf9": "u",
+        "\xc0": "A", "\xc8": "E", "\xc9": "E",
+        "\xcc": "I", "\xd2": "O", "\xd9": "U",
+        "\xe4": "a", "\xf6": "o", "\xfc": "u",
+    }
+    for src, dst in _MAP.items():
+        text = text.replace(src, dst)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
+# ---------------------------------------------------------------------------
+# HELPER: stelle FIDA
 # ---------------------------------------------------------------------------
 
 def _stars(n) -> str:
     if n is None:
-        return "—"
+        return "-"
     try:
         n = int(float(str(n)))
-        return "★" * n + "☆" * (5 - n) if 1 <= n <= 5 else "—"
+        if not (1 <= n <= 5):
+            return "-"
+        s = "*" if _FONT_NAME == "Helvetica" else "★"   # ★
+        e = "o" if _FONT_NAME == "Helvetica" else "☆"   # ☆
+        return s * n + e * (5 - n)
     except Exception:
-        return "—"
+        return "-"
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +135,8 @@ def export_portfolio_excel(
     price_dict: Optional[dict] = None,
     title: str = "Portafoglio",
 ) -> bytes:
-    """Genera xlsx in memoria con pesi, metriche, correlazioni, serie storiche."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        # Foglio 1: Pesi
         weights_df = pd.DataFrame([
             {"ISIN": isin, "Peso (%)": round(w * 100, 2)}
             for isin, w in weights.items() if w > 0
@@ -89,8 +144,8 @@ def export_portfolio_excel(
         if fund_df is not None and not fund_df.empty:
             try:
                 _cols = [c for c in ["isin","nome","classificazione","casa",
-                                      "perf_1y","perf_3y","volatilita",
-                                      "rating_fida","retrocessione"] if c in fund_df.columns]
+                                     "perf_1y","perf_3y","volatilita",
+                                     "rating_fida","retrocessione"] if c in fund_df.columns]
                 fund_info = fund_df[_cols].copy()
                 fund_info.columns = [c.replace("_"," ").title() for c in _cols]
                 fund_info = fund_info.rename(columns={"Isin": "ISIN"})
@@ -99,15 +154,12 @@ def export_portfolio_excel(
                 pass
         weights_df.to_excel(writer, sheet_name="Pesi", index=False)
 
-        # Foglio 2: Metriche
         metrics_df = pd.DataFrame([{"Metrica": k, "Valore": v} for k, v in metrics.items()])
         metrics_df.to_excel(writer, sheet_name="Metriche", index=False)
 
-        # Foglio 3: Correlazioni
         if corr_df is not None and not corr_df.empty:
             corr_df.to_excel(writer, sheet_name="Correlazioni")
 
-        # Foglio 4: Serie storiche
         if price_dict:
             try:
                 prices_df = pd.DataFrame(price_dict)
@@ -116,7 +168,6 @@ def export_portfolio_excel(
             except Exception:
                 pass
 
-        # Styling header navy
         wb = writer.book
         from openpyxl.styles import Font, PatternFill, Alignment
         navy_fill = PatternFill(start_color="1A2C54", end_color="1A2C54", fill_type="solid")
@@ -142,20 +193,15 @@ def export_portfolio_pdf(
     weights: dict,
     metrics: dict,
     title: str = "Report Portafoglio",
-    chart_bytes: Optional[bytes] = None,          # PNG del grafico frontiera
-    frontier_fig=None,                             # go.Figure → converti al volo
-    fund_df: Optional[pd.DataFrame] = None,       # per stelle FIDA + nomi
-    fund_pool: Optional[dict] = None,             # pool ISIN→info dall'app
+    chart_bytes: Optional[bytes] = None,
+    frontier_fig=None,
+    fund_df: Optional[pd.DataFrame] = None,
+    fund_pool: Optional[dict] = None,
     include_stars: bool = True,
 ) -> bytes:
-    """
-    Genera PDF in memoria.
-    Ritorna bytes pronti per st.download_button.
-    """
     if not HAS_REPORTLAB:
         return b""
 
-    # Converti figura Plotly se non già disponibile come bytes
     if chart_bytes is None and frontier_fig is not None:
         chart_bytes = plotly_to_png(frontier_fig)
 
@@ -167,83 +213,64 @@ def export_portfolio_pdf(
     )
     styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle(
-        "TitleCustom", parent=styles["Heading1"],
-        fontSize=20, textColor=NAVY_RL,
-        spaceAfter=4, spaceBefore=0,
-    )
-    sub_style = ParagraphStyle(
-        "SubCustom", parent=styles["Normal"],
-        fontSize=9, textColor=colors.HexColor("#666666"),
-        spaceAfter=10,
-    )
-    heading_style = ParagraphStyle(
-        "HeadingCustom", parent=styles["Heading2"],
-        fontSize=12, textColor=NAVY_RL,
-        spaceBefore=14, spaceAfter=5,
-        borderPad=0,
-    )
-    small = ParagraphStyle(
-        "Small", parent=styles["Normal"],
-        fontSize=8, textColor=colors.HexColor("#555555"),
-        spaceAfter=4,
-    )
-    normal = styles["Normal"]
+    def _p(style_name, **kw):
+        return ParagraphStyle(style_name, parent=styles["Normal"],
+                              fontName=_FONT_NAME, **kw)
+
+    title_style   = _p("T",  fontSize=20, textColor=NAVY_RL, spaceAfter=4)
+    sub_style     = _p("S",  fontSize=9,  textColor=colors.HexColor("#666666"), spaceAfter=10)
+    heading_style = _p("H",  fontSize=12, textColor=NAVY_RL, spaceBefore=14, spaceAfter=5)
+    small         = _p("Sm", fontSize=8,  textColor=colors.HexColor("#555555"), spaceAfter=4)
 
     story = []
 
-    # ── Intestazione ─────────────────────────────────────────────────────────
-    story.append(Paragraph(title, title_style))
+    # ── Intestazione ──────────────────────────────────────────────────────────
+    story.append(Paragraph(_safe_str(title), title_style))
     story.append(Paragraph(
-        f"Generato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}  ·  "
-        "Portafogli Efficienti",
+        _safe_str(f"Generato il {datetime.now().strftime('%d/%m/%Y alle %H:%M')}  -  Portafogli Efficienti"),
         sub_style,
     ))
     story.append(HRFlowable(width="100%", thickness=1.5, color=NAVY_RL, spaceAfter=8))
 
-    # ── Grafico Frontiera Efficiente ─────────────────────────────────────────
+    # ── Grafico Frontiera Efficiente ──────────────────────────────────────────
     if chart_bytes:
         story.append(Paragraph("Frontiera Efficiente", heading_style))
         try:
-            img_buf = io.BytesIO(chart_bytes)
-            # Larghezza piena A4 meno margini ≈ 17.4cm
-            img = Image(img_buf, width=17.4*cm, height=9.5*cm)
+            img = Image(io.BytesIO(chart_bytes), width=17.4*cm, height=9.5*cm)
             story.append(img)
             story.append(Paragraph(
-                "Il grafico mostra la frontiera efficiente (curva blu) e i portafogli ottimali. "
-                "Max Sharpe (stella rossa) massimizza il rendimento per unità di rischio. "
-                "Min Varianza (diamante blu) minimizza la volatilità.",
+                _safe_str("Curva blu = frontiera efficiente. Stella rossa = Max Sharpe. "
+                          "Diamante blu = Min Varianza."),
                 small,
             ))
         except Exception as _e:
             story.append(Paragraph(f"Grafico non disponibile ({_e})", small))
         story.append(Spacer(1, 0.4*cm))
 
-    # ── Metriche portafoglio ─────────────────────────────────────────────────
+    # ── Metriche ──────────────────────────────────────────────────────────────
     story.append(Paragraph("Metriche di Portafoglio", heading_style))
     m_data = [["Metrica", "Valore"]]
     for k, v in metrics.items():
-        m_data.append([str(k), str(v)])
+        m_data.append([_safe_str(str(k)), _safe_str(str(v))])
     mt = Table(m_data, colWidths=[9*cm, 7*cm])
     mt.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,0),  NAVY_RL),
-        ("TEXTCOLOR",     (0,0), (-1,0),  colors.white),
-        ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
-        ("FONTSIZE",      (0,0), (-1,-1), 9),
-        ("ROWBACKGROUNDS",(0,1), (-1,-1), [colors.white, GRAY_LIGHT]),
-        ("GRID",          (0,0), (-1,-1), 0.4, GRAY_MID),
-        ("LEFTPADDING",   (0,0), (-1,-1), 6),
-        ("RIGHTPADDING",  (0,0), (-1,-1), 6),
-        ("TOPPADDING",    (0,0), (-1,-1), 4),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ("BACKGROUND",    (0,0),(-1,0), NAVY_RL),
+        ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
+        ("FONTNAME",      (0,0),(-1,-1), _FONT_NAME),
+        ("FONTNAME",      (0,0),(-1,0),  _FONT_BOLD),
+        ("FONTSIZE",      (0,0),(-1,-1), 9),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, GRAY_LIGHT]),
+        ("GRID",          (0,0),(-1,-1), 0.4, GRAY_MID),
+        ("LEFTPADDING",   (0,0),(-1,-1), 6),
+        ("TOPPADDING",    (0,0),(-1,-1), 4),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 4),
     ]))
     story.append(KeepTogether([mt]))
     story.append(Spacer(1, 0.4*cm))
 
-    # ── Composizione portafoglio con nomi e stelle FIDA ──────────────────────
+    # ── Composizione portafoglio ──────────────────────────────────────────────
     story.append(Paragraph("Composizione Portafoglio", heading_style))
 
-    # Costruisce dizionario isin→info da tutte le sorgenti disponibili
     _info_map: dict = {}
     if fund_pool:
         _info_map.update(fund_pool)
@@ -255,73 +282,61 @@ def export_portfolio_pdf(
 
     has_stars = include_stars and any(
         _info_map.get(isin, {}).get("rating_fida") is not None
-        for isin in weights if weights[isin] > 0
+        for isin in weights if weights.get(isin, 0) > 0
     )
 
-    # Header tabella
+    star_hdr = "Rating" if _FONT_NAME == "Helvetica" else "★ FIDA"
     if has_stars:
-        hdr = ["ISIN", "Nome / Fondo", "Classificazione", "Peso %", "★ FIDA", "Perf 3Y %"]
-        col_w = [2.8*cm, 6.5*cm, 3.5*cm, 1.6*cm, 1.6*cm, 1.8*cm]
+        hdr    = ["ISIN", "Nome / Fondo", "Classificazione", "Peso %", star_hdr, "Perf 3Y %"]
+        col_w  = [2.8*cm, 6.2*cm, 3.5*cm, 1.6*cm, 1.6*cm, 1.7*cm]
     else:
-        hdr = ["ISIN", "Nome / Fondo", "Classificazione", "Peso %", "Perf 3Y %"]
-        col_w = [2.8*cm, 7.5*cm, 4.0*cm, 1.8*cm, 2.0*cm]
+        hdr    = ["ISIN", "Nome / Fondo", "Classificazione", "Peso %", "Perf 3Y %"]
+        col_w  = [2.8*cm, 7.5*cm, 4.0*cm, 1.8*cm, 2.0*cm]
 
     w_data = [hdr]
     for isin, w in sorted(weights.items(), key=lambda x: -x[1]):
         if w <= 0:
             continue
         info = _info_map.get(isin, {})
-        nome = str(info.get("nome", info.get("FONDO AZIMUT", isin)))[:55]
-        cl   = str(info.get("classificazione", info.get("categoria","—")))[:30]
+        nome = _safe_str(str(info.get("nome", info.get("FONDO AZIMUT", isin)))[:55])
+        cl   = _safe_str(str(info.get("classificazione", info.get("categoria", "-")))[:30])
         perf = info.get("perf_3y")
-        perf_str = f"{float(perf):.1f}%" if perf is not None else "—"
-        row = [isin, nome, cl, f"{w*100:.1f}%", perf_str]
+        perf_str = f"{float(perf):.1f}%" if perf is not None else "-"
         if has_stars:
-            stars = _stars(info.get("rating_fida"))
-            row = [isin, nome, cl, f"{w*100:.1f}%", stars, perf_str]
-        w_data.append(row)
+            w_data.append([isin, nome, cl, f"{w*100:.1f}%",
+                           _stars(info.get("rating_fida")), perf_str])
+        else:
+            w_data.append([isin, nome, cl, f"{w*100:.1f}%", perf_str])
 
-    wt = Table(w_data, colWidths=col_w, repeatRows=1)
     _ts = [
-        ("BACKGROUND",    (0,0), (-1,0),  NAVY_RL),
-        ("TEXTCOLOR",     (0,0), (-1,0),  colors.white),
-        ("FONTNAME",      (0,0), (-1,0),  "Helvetica-Bold"),
-        ("FONTSIZE",      (0,0), (-1,-1), 8.5),
-        ("ROWBACKGROUNDS",(0,1), (-1,-1), [colors.white, GRAY_LIGHT]),
-        ("GRID",          (0,0), (-1,-1), 0.35, GRAY_MID),
-        ("LEFTPADDING",   (0,0), (-1,-1), 5),
-        ("RIGHTPADDING",  (0,0), (-1,-1), 5),
-        ("TOPPADDING",    (0,0), (-1,-1), 3),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-        ("ALIGN",         (3,0), (-1,-1), "CENTER"),
+        ("BACKGROUND",    (0,0),(-1,0), NAVY_RL),
+        ("TEXTCOLOR",     (0,0),(-1,0), colors.white),
+        ("FONTNAME",      (0,0),(-1,-1), _FONT_NAME),
+        ("FONTNAME",      (0,0),(-1,0),  _FONT_BOLD),
+        ("FONTSIZE",      (0,0),(-1,-1), 8.5),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, GRAY_LIGHT]),
+        ("GRID",          (0,0),(-1,-1), 0.35, GRAY_MID),
+        ("LEFTPADDING",   (0,0),(-1,-1), 5),
+        ("TOPPADDING",    (0,0),(-1,-1), 3),
+        ("BOTTOMPADDING", (0,0),(-1,-1), 3),
+        ("ALIGN",         (3,0),(-1,-1), "CENTER"),
     ]
-    # Colori celle stelle FIDA
-    if has_stars:
-        star_col_idx = 4
-        for row_i in range(1, len(w_data)):
-            s_str = w_data[row_i][star_col_idx]
-            if "★★★★★" in s_str:
-                _ts.append(("TEXTCOLOR",(star_col_idx,row_i),(star_col_idx,row_i), colors.HexColor("#D97706")))
-            elif "★★★★" in s_str:
-                _ts.append(("TEXTCOLOR",(star_col_idx,row_i),(star_col_idx,row_i), colors.HexColor("#B45309")))
-            elif "★★★" in s_str:
-                _ts.append(("TEXTCOLOR",(star_col_idx,row_i),(star_col_idx,row_i), colors.HexColor("#92400E")))
-
+    wt = Table(w_data, colWidths=col_w, repeatRows=1)
     wt.setStyle(TableStyle(_ts))
     story.append(wt)
 
     if has_stars:
-        story.append(Paragraph(
-            "★ Rating FIDA: ★★★★★ = 5 stelle (top), ★★★ = 3 stelle (nella media)",
-            small,
-        ))
+        legend = ("Rating FIDA: ***** = 5 stelle (top), *** = 3 stelle"
+                  if _FONT_NAME == "Helvetica"
+                  else "Rating FIDA: ★★★★★ = 5 stelle (top), ★★★ = 3 stelle")
+        story.append(Paragraph(legend, small))
 
-    # ── Footer ───────────────────────────────────────────────────────────────
+    # ── Footer ────────────────────────────────────────────────────────────────
     story.append(Spacer(1, 0.5*cm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=GRAY_MID))
     story.append(Paragraph(
-        "Documento generato da Portafogli Efficienti — solo uso interno. "
-        "Non costituisce consulenza finanziaria.",
+        _safe_str("Documento generato da Portafogli Efficienti - solo uso interno. "
+                  "Non costituisce consulenza finanziaria."),
         small,
     ))
 
