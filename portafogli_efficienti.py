@@ -1512,16 +1512,21 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
                         _good_price_dict[_p_isin] = _p_ser
 
                 if _flat_isins:
-                    _flat_names = [str(_all_fund_pool.get(i,{}).get("nome",i))[:35]
-                                   for i in _flat_isins]
-                    st.warning(
-                        f"⚠️ {len(_flat_isins)} serie storiche piatte escluse dall'ottimizzazione:\n" +
-                        "\n".join(f"- {n}" for n in _flat_names[:5]) +
-                        (f"\n...e altri {len(_flat_isins)-5}" if len(_flat_isins)>5 else "") +
-                        "\n\n**Causa:** fondi senza dati di performance o con dati in formato decimale.\n"
-                        "Clicca **🗑️ Svuota cache** nella sidebar se il problema persiste."
-                    )
                     price_dict = _good_price_dict
+                    # Info discreta: solo expander collassato, non warning rosso
+                    with st.expander(
+                        f"ℹ️ {len(_flat_isins)} strument{'o' if len(_flat_isins)==1 else 'i'} "
+                        f"senza dati storici (esclus{'o' if len(_flat_isins)==1 else 'i'})",
+                        expanded=False
+                    ):
+                        _flat_names = [str(_all_fund_pool.get(i,{}).get("nome",i))[:40]
+                                       for i in _flat_isins]
+                        for _fn in _flat_names[:8]:
+                            st.caption(f"• {_fn}")
+                        st.caption(
+                            "Causa: dati non disponibili su yfinance o Morningstar. "
+                            "Usa 🗑️ Svuota cache se il problema persiste."
+                        )
 
             if len(price_dict) < 3:
                 st.error(
