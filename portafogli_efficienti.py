@@ -1483,16 +1483,27 @@ puoi inserirlo — il modello bilanicia questa view con il mercato in base alla 
         _ms_vol = ms.get("vol", 0) if ms and "error" not in ms else 0
         _ms_sh  = ms.get("sharpe", 0) if ms and "error" not in ms else 0
 
-        if abs(_ms_ret) < 0.02 or abs(_ms_sh) > 8:
-            st.warning(
-                "⚠️ **I risultati sembrano degeneri** "
-                f"(Rendimento atteso: {_ms_ret*100:.2f}%, Sharpe: {_ms_sh:.2f}). "
-                "Cause probabili:\n"
-                "- Le performance dei fondi nell'Excel sono in formato decimale "
-                "(es. 0.27 invece di 27%) e la cache non è stata aggiornata.\n"
-                "**Soluzione:** clicca **🗑️ Svuota tutta la cache** nella sidebar, "
-                "ricarica i file Excel e ricalcola."
+        _is_degenerate = abs(_ms_ret) < 0.02 or abs(_ms_sh) > 8
+
+        if _is_degenerate:
+            st.error(
+                f"🚫 **Dati non validi** — Rendimento {_ms_ret*100:.2f}% · Sharpe {_ms_sh:.2f}\n\n"
+                "Le serie storiche dei fondi sono piatte (probabilmente le performance "
+                "nell'Excel sono in formato decimale: 0.27 invece di 27%).\n\n"
+                "**Procedura di reset:**"
             )
+            _rc1, _rc2, _rc3 = st.columns(3)
+            if _rc1.button("1️⃣ Svuota cache", type="primary", use_container_width=True):
+                _load_all_data.clear()
+                _load_preselection.clear()
+                _load_etf_universe_cached.clear()
+                for _k in ["fe_result","fe_price_dict","bl_result"]:
+                    st.session_state.pop(_k, None)
+                st.toast("✅ Cache svuotata — ricarica i file Excel")
+                st.rerun()
+            _rc2.info("2️⃣ Ricarica i file Excel dalla sidebar")
+            _rc3.info("3️⃣ Ricalcola la frontiera")
+            st.stop()  # Non mostrare il grafico degenere
 
         # ── Grafico Frontiera Efficiente — stile Markowitz classico ─────
         fig_fe = go.Figure()
