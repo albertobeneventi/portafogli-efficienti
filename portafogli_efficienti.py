@@ -1154,12 +1154,21 @@ elif nav == "📈 Frontiera Efficiente":
                 )
 
         st.session_state["fe_selected_isins"] = _all_sel
-        st.session_state["fe_ac_map"] = (
+        # Costruisce ac_map includendo i fondi Azimut iniettati
+        # (non presenti in _az_sel/_ob_sel originali → li mappa dal loro _macro nel pool)
+        _ac_map_base = (
             {i: "Azioni"        for i in _az_sel} |
             {i: "Obbligazioni"  for i in _ob_sel} |
             {i: "Bilanciato"    for i in _bi_sel} |
             {i: "Materie Prime" for i in _mp_sel}
         )
+        _macro_to_ac = {"Azioni": "Azioni", "Obbligazioni": "Obbligazioni",
+                        "Materie Prime": "Materie Prime", "Bilanciato": "Bilanciato"}
+        for _isin_ac in _all_sel:
+            if _isin_ac not in _ac_map_base:
+                _pm = _all_fund_pool.get(_isin_ac, {}).get("_macro", "")
+                _ac_map_base[_isin_ac] = _macro_to_ac.get(_pm, "Azioni")
+        st.session_state["fe_ac_map"] = _ac_map_base
         st.session_state["fe_ac_target"] = {
             k: v/100 for k, v in [
                 ("Azioni", int(_pct_az)), ("Obbligazioni", int(_pct_ob)),
@@ -1329,8 +1338,8 @@ elif nav == "📈 Frontiera Efficiente":
                         if sc_mapper:
                             sector_constraints = {
                                 "mapper": sc_mapper,
-                                "lower": {k: max(0, v - 0.10) for k, v in ac_target.items()},
-                                "upper": {k: min(1, v + 0.10) for k, v in ac_target.items()},
+                                "lower": {k: max(0, v - 0.05) for k, v in ac_target.items()},
+                                "upper": {k: min(1, v + 0.05) for k, v in ac_target.items()},
                             }
 
                     result = compute_efficient_frontier(
@@ -1386,13 +1395,18 @@ elif nav == "📈 Frontiera Efficiente":
 
         st.markdown("---")
         st.subheader("📊 Risultati Ottimizzazione")
+        st.caption(
+            "⚠️ **Nota**: Rendimento e Volatilità sono stime del modello basate sulle "
+            "performance storiche a 3 anni dei fondi selezionati — non sono previsioni garantite. "
+            "Il rendimento è il ritorno cumulativo atteso basato sui dati storici, non annualizzato."
+        )
 
         # KPI
         m_col = st.columns(4)
         ms = result.get("max_sharpe", {})
         if ms and "error" not in ms:
-            m_col[0].metric("📈 Rendimento (Max Sharpe)", f"{ms['ret']*100:.2f}%")
-            m_col[1].metric("📉 Volatilità (Max Sharpe)", f"{ms['vol']*100:.2f}%")
+            m_col[0].metric("📈 Rendimento stimato (3Y cumulativo)", f"{ms['ret']*100:.2f}%")
+            m_col[1].metric("📉 Volatilità annua stimata", f"{ms['vol']*100:.2f}%")
             m_col[2].metric("⚡ Sharpe Ratio", f"{ms['sharpe']:.3f}")
             if price_dict:
                 mdd = estimate_max_drawdown(ms["weights"], price_dict)
@@ -1926,7 +1940,7 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                     "Nome": nome[:55],
                     "Classificazione": str(info.get("classificazione", info.get("categoria", ""))),
                     "Peso %": round(peso * 100, 2),
-                    "Perf 3Y % ann.": info.get("perf_3y"),
+                    "Perf 3Y %": info.get("perf_3y"),
                     "Volatilità %": info.get("volatilita"),
                 })
             w_df = pd.DataFrame(w_rows)
@@ -1937,9 +1951,9 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                              column_config={
                                  "Peso %": st.column_config.ProgressColumn(
                                      "Peso %", min_value=0, max_value=100, format="%.1f%%"),
-                                 "Perf 3Y % ann.": st.column_config.NumberColumn(
-                                     "Perf 3Y % ann.", format="%.1f",
-                                     help="Rendimento annualizzato a 3 anni (fonte: Excel)"),
+                                 "Perf 3Y %": st.column_config.NumberColumn(
+                                     "Perf 3Y %", format="%.1f",
+                                     help="Rendimento cumulativo 3 anni (fonte: file Excel)"),
                                  "Volatilità %": st.column_config.NumberColumn(format="%.2f"),
                              })
             with c2:
