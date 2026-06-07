@@ -355,7 +355,20 @@ with st.sidebar:
             key="up_azimut",
             help="fondi_azimut_isin_completo_RATED.xlsx",
         )
-        _has_new = (up_terzi is not None or up_azimut is not None)
+        st.markdown("---")
+        st.markdown("**📊 View di Mercato** *(opzionale)*")
+        up_views = st.file_uploader(
+            "File view di mercato",
+            type=["xlsx"],
+            key="up_views",
+            help=(
+                "Excel con fogli: 'Pesi' (allocazione target per sottocategoria), "
+                "'View' (rendimenti attesi + confidenza per BL), "
+                "'Preferiti' (ISIN da includere). "
+                "Vedi Guida per il formato."
+            ),
+        )
+        _has_new = (up_terzi is not None or up_azimut is not None or up_views is not None)
         if _has_new:
             if st.button("🔄 Ricarica dati con nuovi file", use_container_width=True,
                          type="primary"):
@@ -401,6 +414,16 @@ try:
 except Exception:
     pass
 
+try:
+    _up_v = st.session_state.get("up_views")
+    if _up_v is not None:
+        _new_bytes = _up_v.getvalue()
+        if _new_bytes:
+            st.session_state["_views_bytes_cached"] = _new_bytes
+            st.session_state["_views_upload_name"]  = _up_v.name
+except Exception:
+    pass
+
 # Usa i bytes dalla cache persistente (rimangono anche se il file uploader viene chiuso)
 _terzi_bytes  = st.session_state.get("_terzi_bytes_cached")
 _azimut_bytes = st.session_state.get("_azimut_bytes_cached")
@@ -425,6 +448,20 @@ except Exception as e:
     st.error(f"Errore nella costruzione delle liste: {e}")
     lista_a, lista_b = pd.DataFrame(), pd.DataFrame()
 
+# ---------------------------------------------------------------------------
+# CARICAMENTO VIEW DI MERCATO
+# ---------------------------------------------------------------------------
+from utils.market_views_loader import MarketViews, load_market_views
+
+_views_bytes = st.session_state.get("_views_bytes_cached")
+_market_views: MarketViews = MarketViews()
+if _views_bytes:
+    try:
+        _market_views = load_market_views(_views_bytes)
+        st.session_state["_market_views_obj"] = _market_views
+    except Exception as _e_mv:
+        st.session_state.pop("_market_views_obj", None)
+
 
 # ---------------------------------------------------------------------------
 # SIDEBAR — RESTO NAVIGAZIONE
@@ -437,6 +474,16 @@ with st.sidebar:
         _ts_disp = st.session_state.get("_terzi_upload_ts") or st.session_state.get("_azimut_upload_ts")
         _data_str = _ts_disp.strftime("%d/%m/%Y") if _ts_disp else "—"
         st.success(f"✅ {_tot:,} fondi  ·  {_data_str}")
+    # Badge view di mercato
+    if not _market_views.is_empty():
+        _vn = st.session_state.get("_views_upload_name","view_mercato.xlsx")
+        _nw = len(_market_views.weights)
+        _nv = len(_market_views.bl_views)
+        _np = len(_market_views.preferiti)
+        st.info(
+            f"📊 **View di mercato caricate** — {_vn}\n\n"
+            f"Pesi: {_nw} sottocategorie · View BL: {_nv} · Preferiti: {_np}"
+        )
     st.markdown("---")
     nav = st.radio(
         "Navigazione",
@@ -615,6 +662,51 @@ elif nav == "📈 Frontiera Efficiente":
         "Max Sharpe, Min Volatilità e Black-Litterman in un clic."
     )
 
+    # ── PANNELLO VIEW DI MERCATO ─────────────────────────────────────────────
+    if not _market_views.is_empty():
+        with st.expander("📊 View di mercato attive", expanded=True):
+            _mv_c1, _mv_c2 = st.columns(2)
+
+            if _market_views.weights:
+                with _mv_c1:
+                    st.markdown("**Allocazione target da file**")
+                    _w_rows = []
+                    for _cat, _wv in _market_views.weights.items():
+                        _seg_icon = {"+" : "🟢", "=" : "⚪", "-" : "🔴"}.get(_wv.get("segnale",""), "⚪")
+                        _w_rows.append({
+                            "Sottocategoria": _cat,
+                            "Target %": f"{_wv['peso']:.1f}%",
+                            "Min–Max": f"{_wv['min']:.0f}%–{_wv['max']:.0f}%",
+                            "Segnale": f"{_seg_icon} {_wv.get('segnale','')}",
+                            "Note": _wv.get("note","")[:40],
+                        })
+                    st.dataframe(pd.DataFrame(_w_rows), use_container_width=True,
+                                 hide_index=True)
+
+            if _market_views.bl_views:
+                with _mv_c2:
+                    st.markdown("**View Black-Litterman da file**")
+                    _v_rows = []
+                    for _k, _r in _market_views.bl_views.items():
+                        _c = _market_views.bl_confs.get(_k, 0.5)
+                        _n = _market_views.bl_notes.get(_k, "")[:40]
+                        _v_rows.append({
+                            "Asset / Categoria": _k[:35],
+                            "Rend. atteso %": f"{_r:.1f}%",
+                            "Confidenza": f"{_c:.0%}",
+                            "Note": _n,
+                        })
+                    st.dataframe(pd.DataFrame(_v_rows), use_container_width=True,
+                                 hide_index=True)
+
+            if _market_views.preferiti:
+                st.markdown(
+                    f"**Preferiti (force-include):** "
+                    + ", ".join(_market_views.preferiti[:10])
+                    + ("…" if len(_market_views.preferiti) > 10 else "")
+                )
+            if _market_views.errors:
+                st.warning("⚠️ " + " | ".join(_market_views.errors))
 
     # ── POOL GLOBALE (interno) ───────────────────────────────────────────────
     from utils.etf_tickers import (get_dividend_stocks_df, DIVIDEND_STOCKS,
@@ -626,7 +718,14 @@ elif nav == "📈 Frontiera Efficiente":
 
     def _pool_add(isin: str, info: dict):
         if isin and isin not in _all_fund_pool:
-            _all_fund_pool[isin] = info
+            entry = dict(info)
+            entry.setdefault("isin", isin)
+            # Regola Materie Prime: solo ETF/ETC fisici o su indici commodity.
+            # I fondi UCITS (non ETF) classificati come Materie Prime sono in realtà
+            # azionari di aziende estrattive/minerarie → riclassifica come Azioni.
+            if entry.get("_macro") == "Materie Prime" and entry.get("_source","") != "etf":
+                entry["_macro"] = "Azioni"
+            _all_fund_pool[isin] = entry
 
     def _pool_from_df(df: pd.DataFrame):
         for _, r in df.iterrows():
@@ -666,8 +765,14 @@ elif nav == "📈 Frontiera Efficiente":
 
     import re as _re
     _CLASS_TO_MACRO = [
-        ("Materie Prime", ["materie prime","commodity","commodities","energy",
-                           "metals","oro","gold","petrolio","oil"]),
+        # Materie Prime: SOLO ETF/ETC su commodities fisiche o indici.
+        # I fondi azionari di aziende estrattive/minerarie/energetiche
+        # vengono gestiti da _macro_from_class con il parametro is_etf.
+        ("Materie Prime", ["materie prime","commodity","commodities",
+                           "bloomberg commodity","gsci","crb index",
+                           "metalli preziosi","precious metal",
+                           "oro fisico","physical gold","physical silver",
+                           "etc ","etf commodity"]),
         ("Obbligazioni",  ["obbligazionari","obbligazionario","bond",
                            "fixed income","reddito fisso","high yield",
                            "corporate bond","government bond","duration"]),
@@ -677,11 +782,25 @@ elif nav == "📈 Frontiera Efficiente":
                            "tematici","tematico","small cap","large cap","dividend"]),
     ]
 
-    def _macro_from_class(cl):
-        cl = str(cl).lower()
+    # Fondi (non ETF) con queste keyword nella classificazione
+    # sono azionari di aziende estrattive → classificati come Azioni
+    _EXTRACTIVE_EQUITY_KW = [
+        "minerari","mining","estrattiv","risorse naturali","natural resources",
+        "azionari energia","azionari materie","azionari oro","azionari risorse",
+        "gold mine","gold miner","silver mine","energy equit","oil & gas",
+        "oil gas","petrolio azionari","energy stock","risorse",
+    ]
+
+    def _macro_from_class(cl, is_etf: bool = False):
+        cl_low = str(cl).lower()
+        # Fondi (non ETF) di aziende estrattive/energetiche → Azioni, non Materie Prime
+        if not is_etf:
+            for kw in _EXTRACTIVE_EQUITY_KW:
+                if kw in cl_low:
+                    return "Azioni"
         for macro, kws in _CLASS_TO_MACRO:
             for kw in kws:
-                if _re.search(r"(?<![a-z])" + _re.escape(kw) + r"(?![a-z])", cl):
+                if _re.search(r"(?<![a-z])" + _re.escape(kw.strip()) + r"(?![a-z])", cl_low):
                     return macro
         return None
 
@@ -721,7 +840,11 @@ elif nav == "📈 Frontiera Efficiente":
         if not df_unified.empty:
             from utils.scoring import compute_scores_df
             _fu = compute_scores_df(df_unified.copy())
-            _fu["_macro_auto"] = _fu["classificazione"].apply(_macro_from_class)
+            _is_etf_ser = _fu.get("_source", pd.Series("fund", index=_fu.index)) == "etf"
+            _fu["_macro_auto"] = [
+                _macro_from_class(cl, is_etf=ie)
+                for cl, ie in zip(_fu["classificazione"], _is_etf_ser)
+            ]
             _fu = _fu[_fu["_macro_auto"] == macro]
             _fu = _fu[~_fu.apply(
                 lambda r: _is_monetary(r.get("classificazione",""), r.get("nome","")), axis=1
@@ -1272,7 +1395,9 @@ elif nav == "📈 Frontiera Efficiente":
     min_w = _prev_vals.get("min_w_pct", 3) / 100
     max_w = _prev_vals.get("max_w_pct", 30) / 100
     sel_isins = st.session_state.get("fe_selected_isins", [])
-    forced_include_sel: list = []
+    # Preferiti dal file view di mercato (force-include permanente)
+    _mv_forced_base: list = list(_market_views.preferiti) if not _market_views.is_empty() else []
+    forced_include_sel: list = list(_mv_forced_base)
     use_bl = False
     bl_views: dict = {}
     bl_conf: dict = {}
@@ -1534,8 +1659,20 @@ elif nav == "📈 Frontiera Efficiente":
                     # ── Black-Litterman sempre calcolato ──────────────────
                     # Views manuali se inserite, altrimenti auto da Score Qualità
                     with st.spinner("Black-Litterman (views auto da Score Qualità)..."):
-                        _bl_views_used  = bl_views if (use_bl and bl_views) else {}
-                        _bl_confs_used  = bl_conf  if (use_bl and bl_views) else {}
+                        _bl_views_used  = dict(bl_views) if (use_bl and bl_views) else {}
+                        _bl_confs_used  = dict(bl_conf)  if (use_bl and bl_views) else {}
+
+                        # Integra le view dal file di mercato (non sovrascrivono le manuali)
+                        if not _market_views.is_empty() and _market_views.bl_views:
+                            from utils.market_views_loader import expand_category_views
+                            _mv_views_exp, _mv_confs_exp = expand_category_views(
+                                _market_views, _all_fund_pool
+                            )
+                            for _mvk, _mvr in _mv_views_exp.items():
+                                if _mvk not in _bl_views_used:   # le manuali hanno priorità
+                                    _bl_views_used[_mvk] = _mvr
+                                    _bl_confs_used[_mvk] = _mv_confs_exp.get(_mvk, 0.5)
+
                         if not _bl_views_used:
                             # Auto-views da Score Qualità
                             _base_mu = result.get("mu", {})
@@ -3138,12 +3275,13 @@ elif nav == "📖 Guida":
     )
 
     # ── TAB PRINCIPALI ──────────────────────────────────────────────────────
-    g1, g2, g3, g4, g5 = st.tabs([
+    g1, g2, g3, g4, g5, g6 = st.tabs([
         "📋 Le Liste e i Dati",
         "⭐ Score Qualità & Portafoglio Qualità",
         "📈 Frontiera Efficiente",
         "🔮 Black-Litterman",
         "📐 Regole di Diversificazione",
+        "📊 File View di Mercato",
     ])
 
     # ── TAB 1: LE LISTE ─────────────────────────────────────────────────────
@@ -3525,6 +3663,99 @@ Puoi **bloccare** un fondo (rimane nel portafoglio indipendentemente dallo score
 - **Omega** (matrice di incertezza delle view): proporzionale alla varianza dell'asset
 - Le view sono **assolute** (rendimento atteso diretto), non relative
 - Confidenza > 0.8 → la view domina; < 0.3 → il prior domina
+""")
+
+    # ── TAB 6: FILE VIEW DI MERCATO ─────────────────────────────────────────
+    with g6:
+        st.subheader("File View di Mercato — Formato e Utilizzo")
+        st.markdown("""
+Il file **view di mercato** è un Excel (.xlsx) che puoi preparare con le tue analisi macro
+e view di portafoglio. L'app lo legge all'avvio e lo usa per:
+
+1. **Suggerire l'allocazione per sottocategoria** (foglio *Pesi*)
+2. **Pre-popolare le view Black-Litterman** (foglio *View*)
+3. **Forzare l'inclusione di asset specifici** (foglio *Preferiti*)
+
+Carica il file dalla **sidebar** (sezione "View di Mercato").
+""")
+        st.markdown("---")
+
+        st.subheader("Foglio 1 — Pesi (Allocazione target)")
+        st.markdown("""
+Definisce i pesi target per sottocategoria. Usato come riferimento per i vincoli
+dell'ottimizzatore e visualizzato nel pannello "View di mercato attive".
+""")
+        st.code("""
+# Colonne obbligatorie:
+Sottocategoria    | Peso %
+# Colonne opzionali:
+Min %             | Max % | Segnale | Note
+
+# Esempio:
+Sottocategoria         | Peso % | Min % | Max % | Segnale | Note
+Azionari Globali       |   20   |   15  |   25  |   +     | Momentum positivo
+Azionari Europa        |   15   |   10  |   20  |   +     | Valutazioni attraenti
+Azionari USA           |   15   |   10  |   20  |   =     | Valutazioni elevate
+Azionari Emergenti     |   10   |    5  |   15  |   +     | Ripresa Cina/India
+Obbl. Governativi      |   15   |   10  |   20  |   =     |
+Obbl. Corporate IG     |   10   |    5  |   15  |   -     | Spread stretti
+High Yield             |    5   |    0  |   10  |   -     |
+Materie Prime          |    5   |    0  |   10  |   =     | Solo ETF commodity
+Monetario              |    5   |    0  |   10  |   =     | Riserva liquidità
+""", language="text")
+
+        st.info(
+            "**Segnale**: '+' sovrappeso, '=' neutro, '-' sottopeso rispetto al benchmark. "
+            "Mostrato come indicatore visivo (🟢/⚪/🔴) ma non vincola automaticamente l'ottimizzatore."
+        )
+
+        st.markdown("---")
+        st.subheader("Foglio 2 — View (Black-Litterman)")
+        st.markdown("""
+View specifiche su asset o sottocategorie. Vengono usate come input per il
+modello Black-Litterman. Le view manuali inserite nell'app hanno **priorità** su quelle del file.
+""")
+        st.code("""
+# Colonne obbligatorie:
+ISIN o Categoria   | Rendimento %  | Confidenza
+# Colonne opzionali:
+Note
+
+# Esempi:
+ISIN o Categoria            | Rendimento % | Confidenza | Note
+IE00B4L5Y983                |     8.5      |    0.70    | SWDA — outlook positivo
+Azionari Emergenti          |    10.0      |    0.60    | Ripresa Asia
+Obbligazionari High Yield   |     5.0      |    0.50    | Spread ancora competitivi
+LU0061474705                |     7.5      |    0.65    | View specifica su fondo
+""", language="text")
+
+        st.markdown("""
+- **ISIN specifico**: la view si applica solo a quel fondo
+- **Nome sottocategoria**: la view si applica a tutti i fondi con quella classificazione nel portafoglio
+- **Confidenza**: da 0.1 (molto incerta) a 0.9 (quasi certa). 0.5 = view moderata
+""")
+
+        st.markdown("---")
+        st.subheader("Foglio 3 — Preferiti (Force-include)")
+        st.markdown("""
+Asset da includere sempre nel portafoglio, indipendentemente dall'ottimizzazione.
+""")
+        st.code("""
+# Colonne:
+ISIN         | Nome              | Note
+IE00B4L5Y983 | SWDA iShares Core | ETF azionario globale core
+IE00B3F81R35 | AGGH iShares      | ETF obbligazionario aggregato
+""", language="text")
+
+        st.markdown("---")
+        st.subheader("Note operative")
+        st.markdown("""
+- I nomi dei fogli sono flessibili: l'app accetta varianti come *Peso*, *Allocazione*, *Macro* per il foglio Pesi;
+  *View*, *Views*, *Rendimenti*, *BL* per le view; *Preferiti*, *Forzati*, *Include* per i preferiti.
+- Il file può avere solo uno o due dei tre fogli — gli altri vengono ignorati senza errori.
+- Le view dal file **non sovrascrivono** le view inserite manualmente nell'app.
+- I preferiti vengono aggiunti alla lista `forced_include` dell'ottimizzatore (peso minimo garantito).
+- Il file rimane attivo per tutta la sessione. Per rimuoverlo, carica un nuovo file o riavvia l'app.
 """)
 
         with st.expander("📊 Classificazione automatica degli strumenti"):
