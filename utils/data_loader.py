@@ -342,6 +342,14 @@ def load_fondi_azimut(path=None) -> pd.DataFrame:
     is_filelike = hasattr(path, "read") or isinstance(path, (bytes, io.BytesIO))
     if not is_filelike and not os.path.exists(path):
         return _demo_fondi_azimut()
+
+    # Se file-like (upload Streamlit), leggi tutto in BytesIO per poter fare seek()
+    # tra il peek e la lettura finale (altrimenti il puntatore rimane alla fine)
+    if hasattr(path, "read"):
+        path = io.BytesIO(path.read())
+    elif isinstance(path, bytes):
+        path = io.BytesIO(path)
+
     # Auto-rileva la riga header: cerca la riga che contiene "ISIN" o "FONDO"
     # (il file può avere una riga di data/titolo sopra la vera intestazione)
     _header_row = 0
@@ -352,8 +360,13 @@ def load_fondi_azimut(path=None) -> pd.DataFrame:
             if any("ISIN" in v for v in _vals) or any("FONDO" in v for v in _vals):
                 _header_row = int(_i)
                 break
+        # Reset puntatore per la lettura completa
+        if isinstance(path, io.BytesIO):
+            path.seek(0)
     except Exception:
         _header_row = 0
+        if isinstance(path, io.BytesIO):
+            path.seek(0)
 
     df = pd.read_excel(path, header=_header_row, dtype=object)
     df.columns = [str(c).strip() for c in df.columns]
