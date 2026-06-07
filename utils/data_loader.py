@@ -265,23 +265,26 @@ def _normalize_perf(df: pd.DataFrame, col_map: dict) -> pd.DataFrame:
     return df
 
 
-def _autoscale_perf(df: pd.DataFrame, perf_cols: list[str]) -> pd.DataFrame:
+def _autoscale_perf(df: pd.DataFrame, perf_cols: list[str], threshold: float = 10.0) -> pd.DataFrame:
     """
-    Se le performance sono in formato decimale (es. 0.085 invece di 8.5%),
+    Se le performance sono in formato decimale Excel (celle formattate come %)
     moltiplica per 100.
-    Criterio sicuro: il valore massimo assoluto è < 1.5 → certamente decimale.
-    (Evita falsi positivi su dataset con molti fondi obbligazionari a basso rendimento)
+
+    threshold=10  → adatto a file Excel con celle % (es. tabella fondi arricchita):
+        - 192.84% è memorizzato come 1.9284 → 1.9284 < 10 → ×100 = 192.84 ✓
+        - se già in % (192.84) → 192.84 > 10 → nessun scale ✓
+    threshold=1.5 → usato per file Azimut dove i valori sono già in % (es. 7.5 = 7.5%)
     """
     for col in perf_cols:
         if col not in df.columns:
             continue
         vals = pd.to_numeric(df[col], errors="coerce").dropna()
-        if len(vals) == 0:
+        if len(vals) < 2:
             continue
-        # Autoscale SOLO se il massimo assoluto è < 1.5 → tutti i valori sono in [−1.5, 1.5]
-        # In formato percentuale anche i fondi obbligazionari mostrano valori > 1.5 su 3 anni
-        if vals.abs().max() < 1.5 and len(vals) > 3:
-            df[col] = df[col].apply(lambda x: x * 100 if pd.notna(x) and isinstance(x, (int, float)) else x)
+        if vals.abs().max() < threshold:
+            df[col] = df[col].apply(
+                lambda x: x * 100 if pd.notna(x) and isinstance(x, (int, float)) else x
+            )
     return df
 
 
@@ -365,7 +368,8 @@ def load_fondi_azimut(path=None) -> pd.DataFrame:
     c = AZIMUT_COLS
     df = _normalize_perf(df, c)
     perf_cols = [c[k] for k in ["perf_1y","perf_3y","perf_ytd","perf_2024","perf_2023","perf_2022"] if c[k] in df.columns]
-    df = _autoscale_perf(df, perf_cols)
+    # Azimut: valori già in % (es. 7.5 = 7.5%) → soglia bassa 1.5 per non riscalare
+    df = _autoscale_perf(df, perf_cols, threshold=1.5)
 
     if c["ongoing_charges"] in df.columns:
         df[c["ongoing_charges"]] = df[c["ongoing_charges"]].apply(_to_float)
