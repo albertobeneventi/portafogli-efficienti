@@ -34,6 +34,133 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# BENCHMARK DI RENDIMENTO PER SOTTOCATEGORIA FIDA
+# ---------------------------------------------------------------------------
+# Rendimenti attesi annui forward-looking per sottocategoria.
+# Basati su: equity risk premium CAPM area Euro, yield-to-maturity mercato,
+# stime consenso asset manager (BlackRock, Vanguard, JPM LTCMA 2024).
+#
+# Logica: keyword matching sulla classificazione FIDA del fondo.
+# La funzione _subcategory_prior() scorre le tuple (keyword, prior) in ordine
+# e restituisce il primo match. Fallback = prior della macro-categoria.
+#
+# Riferimenti principali (stime 10Y forward, area Euro investore):
+#   Azionari Emergenti:      9.0%  (rischio paese/valuta + ERP più alto)
+#   Azionari USA:            8.0%  (ERP USA, dollaro, valutazione elevata)
+#   Azionari Globali:        7.5%  (media ponderata sviluppati)
+#   Azionari Europa:         7.0%  (valutazioni più basse, crescita più lenta)
+#   Azionari Settoriali:     7.5%  (simile a globali, dispersion alta)
+#   Obbligaz. High Yield:    5.5%  (spread HY IG + rischio default)
+#   Obbligaz. Emergenti:     5.0%  (spread EM + rischio paese)
+#   Obbligaz. Corporate IG:  3.5%  (spread IG + duration)
+#   Obbligaz. Governativi:   2.5%  (risk-free EUR ~2.5%)
+#   Bilanciati aggressivi:   6.0%
+#   Bilanciati moderati:     5.0%
+#   Bilanciati conservativi: 3.5%
+#   Alternativi/Absolute:    4.0%
+#   Monetari:                2.5%
+
+# Lista ordinata: (keyword_lower_in_classificazione, prior_annuo)
+_SUBCAT_PRIOR_MAP: list[tuple[str, float]] = [
+    # ── AZIONARI per area geografica ──────────────────────────────────────
+    ("emergent",          0.090),   # Emergenti, Emerging
+    ("frontier",          0.095),   # Frontier markets
+    ("asia",              0.085),   # Asia Pacific
+    ("pacifico",          0.085),
+    ("cina",              0.090),   # Cina, China
+    ("china",             0.090),
+    ("india",             0.095),
+    ("latam",             0.090),
+    ("latin",             0.090),
+    ("africa",            0.095),
+    ("giappone",          0.075),
+    ("japan",             0.075),
+    ("usa",               0.080),
+    ("america",           0.080),
+    ("stati uniti",       0.080),
+    ("nord america",      0.080),
+    ("europa",            0.070),
+    ("europe",            0.070),
+    ("eurozona",          0.070),
+    ("italia",            0.070),
+    ("globali",           0.075),
+    ("global",            0.075),
+    ("worldwide",         0.075),
+    ("internazional",     0.075),
+    # ── OBBLIGAZIONARI per tipo ───────────────────────────────────────────
+    ("high yield",        0.055),
+    ("alto rendimento",   0.055),
+    ("convertibil",       0.055),
+    ("subordinati",       0.050),
+    ("at1",               0.060),
+    ("coco",              0.060),
+    ("obbligaz.*emerg",   0.050),   # regex non supportato — usiamo keyword semplice
+    ("obbligaz. emerg",   0.050),
+    ("emerging bond",     0.050),
+    ("corporate",         0.035),
+    ("societar",          0.035),
+    ("inflation",         0.030),
+    ("indicizzat",        0.030),
+    ("governativ",        0.025),
+    ("governo",           0.025),
+    ("statali",           0.025),
+    ("treasury",          0.025),
+    # ── BILANCIATI per profilo ────────────────────────────────────────────
+    ("aggressiv",         0.060),
+    ("dinamic",           0.058),
+    ("moderato",          0.050),
+    ("equilibrat",        0.050),
+    ("conservativ",       0.035),
+    ("prudente",          0.035),
+    ("flessibil",         0.050),
+    ("multi-asset",       0.050),
+    ("multi asset",       0.050),
+    ("allocation",        0.050),
+    # ── ALTERNATIVI ───────────────────────────────────────────────────────
+    ("absolute return",   0.040),
+    ("ritorno assoluto",  0.040),
+    ("long short",        0.045),
+    ("market neutral",    0.035),
+    ("real asset",        0.050),
+    ("commodit",          0.050),
+    ("materie prime",     0.050),
+    ("oro",               0.045),
+    ("gold",              0.045),
+    ("immobiliar",        0.055),
+    ("reit",              0.055),
+    # ── MONETARI ─────────────────────────────────────────────────────────
+    ("monetar",           0.025),
+    ("liquidit",          0.025),
+    ("money market",      0.025),
+]
+
+# Macro-prior di fallback (quando classificazione assente o non matchata)
+_MU_PRIOR_MACRO: dict[str, float] = {
+    "Azionario":       0.075,
+    "Obbligazionario": 0.030,
+    "Bilanciato":      0.050,
+    "Alternativo":     0.040,
+    "Monetario":       0.025,
+    "ETF":             0.070,
+    "Azione":          0.080,
+}
+
+
+def _subcategory_prior(classificazione: str, macro_bucket: str) -> float:
+    """
+    Restituisce il rendimento atteso forward-looking per sottocategoria FIDA.
+    Prima scorre _SUBCAT_PRIOR_MAP (keyword sulla classificazione),
+    poi usa _MU_PRIOR_MACRO come fallback.
+    """
+    if classificazione:
+        cl_low = str(classificazione).lower()
+        for kw, prior in _SUBCAT_PRIOR_MAP:
+            if kw in cl_low:
+                return prior
+    return _MU_PRIOR_MACRO.get(macro_bucket, 0.060)
+
+
+# ---------------------------------------------------------------------------
 # MATRICE DI CORRELAZIONE CATEGORIALE (fondi UCITS senza serie storiche)
 # ---------------------------------------------------------------------------
 # Valori derivati dalla letteratura empirica su fondi UCITS europei.
@@ -169,24 +296,9 @@ def build_hybrid_mu_sigma(
     #   Alternativo:     4.0% anno
     #   Monetario:       2.5% anno
     #
-    # Con μ uguale per tutti i fondi della stessa categoria, l'ottimizzatore
-    # minimizza il rischio per il target di rendimento: NON sceglie i fondi
-    # col miglior passato ma costruisce la struttura di portafoglio ottimale.
-    # Le differenze tra fondi vengono catturate dalla σ (volatilità Excel).
-    # Il tab Black-Litterman consente di aggiungere view soggettive.
-    _MU_PRIOR = {
-        "Azionario":      0.075,
-        "Obbligazionario":0.030,
-        "Bilanciato":     0.050,
-        "Alternativo":    0.040,
-        "Monetario":      0.025,
-        "ETF":            0.070,
-        "Azione":         0.080,
-    }
-    # Per ETF/azioni con serie storica reale, usiamo comunque il prior di categoria
-    # (anche yfinance restituisce rendimenti storici, soggetti allo stesso bias)
-    # Eccezione: se real_mu esiste ma è < 0 (asset in perdita strutturale), usiamo
-    # il real_mu come segnale negativo smorzato.
+    # I benchmark per sottocategoria e la funzione _subcategory_prior()
+    # sono definiti a livello di modulo (sopra).
+    # μᵢ = _subcategory_prior(classificazione, macro_bucket) + alpha_i(score)
 
     fund_isins = [i for i in all_isins if i not in real_mu]
     stat_vol: dict[str, float] = {}
@@ -236,43 +348,46 @@ def build_hybrid_mu_sigma(
     #   Mediano (50° percentile):        0%/anno  (= solo benchmark categoria)
     #   Bottom manager (<25° percentile): -1% → -2%/anno
     #
-    ALPHA_MAX = 0.020   # 2% per anno: range ragionevole per gestione attiva UCITS
+    ALPHA_MAX = 0.020   # ±2%/anno: range empirico per gestione attiva UCITS
 
-    # Raggruppa score per categoria
-    cat_scores: dict[str, list] = {}
+    # Raggruppa score per SOTTOCATEGORIA (classificazione FIDA) per normalizzare
+    # l'alpha correttamente: un emergenti è confrontato solo con altri emergenti
+    subcat_scores: dict[str, list] = {}
     for i in all_isins:
-        bkt_i = _bucket_of(assets_info.get(i, {}))
-        sc = assets_info.get(i, {}).get("score_qualita")
+        info_i = assets_info.get(i, {})
+        cl_i   = str(info_i.get("classificazione", "") or "").strip()
+        sc     = info_i.get("score_qualita")
         try:
             sc_f = float(sc)
             if not np.isnan(sc_f):
-                cat_scores.setdefault(bkt_i, []).append((i, sc_f))
+                subcat_scores.setdefault(cl_i, []).append((i, sc_f))
         except (TypeError, ValueError):
             pass
 
-    # Per ogni categoria: calcola mediana e std dei score
-    cat_stats: dict[str, tuple] = {}   # bkt → (median, std)
-    for bkt_i, items in cat_scores.items():
+    # Statistiche per sottocategoria (mediana + std)
+    subcat_stats: dict[str, tuple] = {}
+    for cl_i, items in subcat_scores.items():
         vals = np.array([v for _, v in items])
         med  = float(np.median(vals))
         std  = float(np.std(vals)) if len(vals) > 1 else 1.0
-        cat_stats[bkt_i] = (med, max(std, 0.1))
+        subcat_stats[cl_i] = (med, max(std, 0.1))
 
     mu_vals = {}
     for i in all_isins:
-        bkt_i   = _bucket_of(assets_info.get(i, {}))
-        prior_i = _MU_PRIOR.get(bkt_i, 0.060)
+        info_i  = assets_info.get(i, {})
+        bkt_i   = _bucket_of(info_i)
+        cl_i    = str(info_i.get("classificazione", "") or "").strip()
 
-        # Alpha da score
-        sc = assets_info.get(i, {}).get("score_qualita")
+        # Prior specifico per sottocategoria FIDA
+        prior_i = _subcategory_prior(cl_i, bkt_i)
+
+        # Alpha da score normalizzato nella stessa sottocategoria
+        sc = info_i.get("score_qualita")
         alpha_i = 0.0
         try:
             sc_f = float(sc)
-            if not np.isnan(sc_f) and bkt_i in cat_stats:
-                med, std = cat_stats[bkt_i]
-                # z-score rispetto alla categoria, scalato a ALPHA_MAX
-                # 1 std sopra la mediana → alpha ≈ ALPHA_MAX/2
-                # 2+ std → capped a ALPHA_MAX
+            if not np.isnan(sc_f) and cl_i in subcat_stats:
+                med, std = subcat_stats[cl_i]
                 z = (sc_f - med) / std
                 alpha_i = float(np.clip(z * ALPHA_MAX * 0.5, -ALPHA_MAX, ALPHA_MAX))
         except (TypeError, ValueError):
