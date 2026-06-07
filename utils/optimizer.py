@@ -164,11 +164,17 @@ def build_hybrid_mu_sigma(
         p3   = info.get("perf_3y")
         vol  = info.get("volatilita")
         p1   = info.get("perf_1y")
-        # μ: usa perf_3y se disponibile, altrimenti perf_1y (smorzata), default 5%
+        # μ annualizzato: perf_3y è CUMULATIVO 3 anni → deve essere annualizzato
+        # Formula: μ_ann = (1 + r_3y_cum)^(1/3) - 1
+        # es. 150% cumulativo → (2.50)^(1/3)-1 ≈ 35.7%/anno
+        # NB: NON usare r_3y/3 (è sbagliato per rendimenti composti)
         if p3 is not None and not (isinstance(p3, float) and np.isnan(p3)):
-            mu_val = float(p3) / 100.0
+            r3 = float(p3) / 100.0          # cumulativo decimale, es. 1.5134
+            # Limita r3 a range [-0.99, +9.0] per evitare overflow (fondi anomali)
+            r3 = max(-0.99, min(r3, 9.0))
+            mu_val = (1.0 + r3) ** (1.0 / 3.0) - 1.0   # annualizzato
         elif p1 is not None and not (isinstance(p1, float) and np.isnan(p1)):
-            mu_val = float(p1) / 100.0 * 0.8   # smorzamento prudenziale
+            mu_val = float(p1) / 100.0 * 0.8   # già annualizzato, smorzamento prudenziale
         else:
             mu_val = 0.05
         # σ: usa volatilita se disponibile, default basato su categoria

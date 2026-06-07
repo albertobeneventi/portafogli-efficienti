@@ -1571,14 +1571,20 @@ elif nav == "📈 Frontiera Efficiente":
         st.caption(
             "⚠️ **Nota**: Rendimento e Volatilità sono stime del modello basate sulle "
             "performance storiche a 3 anni dei fondi selezionati — non sono previsioni garantite. "
-            "Il rendimento è il ritorno cumulativo atteso basato sui dati storici, non annualizzato."
+            "Il **rendimento annualizzato** è ottenuto da perf_3y annualizzata [(1+r)^(1/3)-1]; "
+            "il cumulativo 3Y indicato come delta è ricostruito da quel valore. "
+            "Sharpe = (rendimento annuo − tasso risk-free 2.5%) / volatilità annua."
         )
 
         # KPI
         m_col = st.columns(4)
         ms = result.get("max_sharpe", {})
         if ms and "error" not in ms:
-            m_col[0].metric("📈 Rendimento stimato (3Y cumulativo)", f"{ms['ret']*100:.2f}%")
+            _ret_ann = ms['ret']                                     # annualizzato (es. 0.357)
+            _ret_3y  = ((1 + _ret_ann) ** 3 - 1) * 100              # cumulativo 3Y (es. 151%)
+            m_col[0].metric("📈 Rendimento annualizzato atteso",
+                            f"{_ret_ann*100:.2f}%",
+                            delta=f"≈ {_ret_3y:.1f}% cumulativo 3Y")
             m_col[1].metric("📉 Volatilità annua stimata", f"{ms['vol']*100:.2f}%")
             m_col[2].metric("⚡ Sharpe Ratio", f"{ms['sharpe']:.3f}")
             if price_dict:
@@ -2026,16 +2032,26 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                 # Tabella di confronto (se punto manuale disponibile)
                 if _manual_point:
                     st.subheader("📊 Confronto: Il tuo portafoglio vs Ottimizzati")
-                    _ms_cmp = {"Rendimento": f"{ms['ret']*100:.2f}%" if ms and 'ret' in ms else "-",
-                               "Volatilità": f"{ms['vol']*100:.2f}%" if ms and 'vol' in ms else "-",
-                               "Sharpe": f"{ms.get('sharpe',0):.3f}" if ms else "-"}
+                    def _fmt_ret(ret_ann):
+                        """Formatta rendimento annualizzato + cumulativo 3Y."""
+                        r3y = ((1 + ret_ann)**3 - 1)*100
+                        return f"{ret_ann*100:.2f}% ann. (≈{r3y:.1f}% 3Y)"
+                    _ms_cmp = {
+                        "Rendimento": _fmt_ret(ms['ret']) if ms and 'ret' in ms else "-",
+                        "Volatilità": f"{ms['vol']*100:.2f}%" if ms and 'vol' in ms else "-",
+                        "Sharpe": f"{ms.get('sharpe',0):.3f}" if ms else "-",
+                    }
                     _mv_cmp_d = result.get("min_variance", {})
-                    _mv_cmp = {"Rendimento": f"{_mv_cmp_d['ret']*100:.2f}%" if _mv_cmp_d and 'ret' in _mv_cmp_d else "-",
-                               "Volatilità": f"{_mv_cmp_d['vol']*100:.2f}%" if _mv_cmp_d and 'vol' in _mv_cmp_d else "-",
-                               "Sharpe": f"{_mv_cmp_d.get('sharpe',0):.3f}" if _mv_cmp_d else "-"}
+                    _mv_cmp = {
+                        "Rendimento": _fmt_ret(_mv_cmp_d['ret']) if _mv_cmp_d and 'ret' in _mv_cmp_d else "-",
+                        "Volatilità": f"{_mv_cmp_d['vol']*100:.2f}%" if _mv_cmp_d and 'vol' in _mv_cmp_d else "-",
+                        "Sharpe": f"{_mv_cmp_d.get('sharpe',0):.3f}" if _mv_cmp_d else "-",
+                    }
+                    _mp_ann = _manual_point['ret'] / 100.0        # manuale è in %
+                    _mp_3y  = ((1 + _mp_ann)**3 - 1)*100
                     _cmp_df = pd.DataFrame({
                         "🟠 Il tuo portafoglio": {
-                            "Rendimento atteso": f"{_manual_point['ret']:.2f}%",
+                            "Rendimento atteso": f"{_manual_point['ret']:.2f}% ann. (≈{_mp_3y:.1f}% 3Y)",
                             "Volatilità (rischio)": f"{_manual_point['vol']:.2f}%",
                             "Indice di Sharpe": str(_manual_point["sharpe"]),
                         },
@@ -2139,9 +2155,12 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                                   textfont_size=10)
                 st.plotly_chart(pie, use_container_width=True, key=f"pie_{chart_key}")
 
+            _rw_ann = pdata.get('ret', 0)
+            _rw_3y  = ((1 + _rw_ann) ** 3 - 1) * 100
             st.markdown(
-                f"**Rendimento atteso:** {pdata.get('ret',0)*100:.2f}% &nbsp;|&nbsp; "
-                f"**Volatilità:** {pdata.get('vol',0)*100:.2f}% &nbsp;|&nbsp; "
+                f"**Rendimento annualizzato:** {_rw_ann*100:.2f}% "
+                f"*(≈ {_rw_3y:.1f}% cumulativo 3Y)* &nbsp;|&nbsp; "
+                f"**Volatilità annua:** {pdata.get('vol',0)*100:.2f}% &nbsp;|&nbsp; "
                 f"**Sharpe:** {pdata.get('sharpe',0):.3f}"
             )
 
