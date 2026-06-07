@@ -1569,14 +1569,16 @@ elif nav == "📈 Frontiera Efficiente":
         st.markdown("---")
         st.subheader("📊 Risultati Ottimizzazione")
         st.caption(
-            "⚠️ **Nota metodologica** — **μᵢ = benchmark categoria + alpha gestore**. "
-            "Benchmark forward-looking: Azionario 7.5%/anno, Obbligazionario 3%, Bilanciato 5%, Alt 4%, Mon 2.5%. "
-            "L'**alpha** è stimato dallo Score Qualità normalizzato per categoria: "
-            "gestori sopra la mediana hanno alpha positivo (+1/+2%); "
-            "gestori sotto la mediana hanno alpha negativo (−1/−2%, costo della sottoperformance). "
-            "Range alpha: ±2%/anno — coerente con la letteratura empirica sui fondi UCITS attivi europei. "
-            "Il tab **Black-Litterman** consente view soggettive per singolo asset. "
-            "Sharpe = (μ − 2.5% risk-free) / σ annua. Non sono previsioni garantite."
+            "**Come si calcolano questi numeri** — "
+            "**Rendimento atteso** = benchmark della sottocategoria FIDA + alpha del gestore. "
+            "I benchmark sono forward-looking per asset class (es. Azionari Emergenti 9%, Europa 7%, "
+            "Obbl. High Yield 5.5%, Governativi 2.5%). "
+            "L'**alpha** (±2%/anno) è stimato dallo Score Qualità normalizzato nella stessa sottocategoria: "
+            "un gestore nel top della sua categoria ha alpha positivo; "
+            "uno sotto la mediana ha alpha negativo — il costo della sottoperformance è esplicito. "
+            "**Volatilità** = da dati Excel con floor minimi per categoria (Equity ≥11%, Bond ≥3%). "
+            "**Sharpe** = (rendimento atteso − 2.5% risk-free) / volatilità annua. "
+            "Non sono previsioni garantite. → *Guida* per il dettaglio metodologico."
         )
 
         # KPI
@@ -3297,84 +3299,122 @@ Per ogni bucket:
         st.markdown("""
 La **Frontiera Efficiente** è il concetto centrale della Teoria Moderna del Portafoglio
 (Markowitz, 1952). È la curva che mostra tutti i portafogli che offrono il **massimo
-rendimento per ogni dato livello di rischio** (o il minimo rischio per ogni dato rendimento).
+rendimento atteso per ogni dato livello di rischio**.
 
-Qualsiasi portafoglio che si trova **al di sotto** della curva è sub-ottimale:
-esiste un portafoglio sulla frontiera che offre lo stesso rendimento con meno rischio,
-o più rendimento con lo stesso rischio.
+Qualsiasi portafoglio al di sotto della curva è sub-ottimale: esiste un portafoglio
+sulla frontiera che offre lo stesso rendimento con meno rischio, o più rendimento
+con lo stesso rischio.
 """)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("""
-**Come la costruisce l'app:**
-1. Recupera serie storiche per tutti gli asset selezionati
-2. Calcola rendimenti attesi (media storica annualizzata)
-3. Calcola matrice di covarianza con **Ledoit-Wolf shrinkage** (più stabile della covarianza campionaria)
-4. Ottimizza con **PyPortfolioOpt** su 50 punti da Min Varianza a Max Rendimento
-5. Genera 5.000 portafogli casuali (Monte Carlo) per visualizzare lo spazio possibile
-""")
-        with col2:
-            st.info("""
-**Limitazione importante:**
-I rendimenti attesi sono basati su dati **storici** (3 anni di default).
-I rendimenti passati non sono predittivi di quelli futuri.
+        st.subheader("Il modello dei rendimenti attesi")
+        st.info("""
+**Il rendimento atteso non è il rendimento storico del fondo.**
 
-La frontiera è utile per capire le **relazioni di rischio/rendimento**
-tra gli asset, non per fare previsioni precise.
+Usare i rendimenti passati come previsione futura in un ottimizzatore porta a un
+problema strutturale: l'ottimizzatore seleziona sempre i fondi con il miglior
+passato recente, indipendentemente dalla struttura di rischio. I numeri risultanti
+(Sharpe > 10, rendimenti > 30%/anno) non hanno senso come base decisionale.
+
+L'app usa un modello a due componenti:
+""")
+        st.markdown("""
+### μᵢ = Benchmark sottocategoria + Alpha del gestore
+
+**1 — Benchmark di sottocategoria** (componente forward-looking)
+
+Il benchmark è il rendimento atteso dell'*asset class*, non del fondo specifico.
+È basato su equity risk premium, yield-to-maturity di mercato e stime consenso
+asset manager (JPMorgan LTCMA, BlackRock, Vanguard — aggiornamento annuale):
+
+| Sottocategoria | Benchmark | Fonte |
+|---|---|---|
+| Azionari Emergenti | 9.0% | ERP EM + premio valuta/paese |
+| Azionari USA | 8.0% | ERP USA + effetto valuta |
+| Azionari Globali | 7.5% | Media ponderata sviluppati |
+| Azionari Europa | 7.0% | ERP EU, valutazioni più basse |
+| Obbl. High Yield | 5.5% | YTM HY − default rate atteso |
+| Obbl. Emergenti | 5.0% | YTM EM − rischio paese |
+| Obbl. Corporate IG | 3.5% | YTM IG EUR |
+| Obbl. Governativi | 2.5% | Risk-free EUR (BTP/Bund medio) |
+| Bilanciati Aggressivi | 6.0% | Media equity/bond pesata |
+| Bilanciati Moderati | 5.0% | |
+| Bilanciati Conservativi | 3.5% | |
+| Monetari | 2.5% | Tasso overnight BCE |
+
+**2 — Alpha del gestore** (componente skill-based, ±2%/anno)
+
+L'alpha stima la *capacità del gestore di sovraperformare o sottoperformare il benchmark*,
+derivata dallo **Score Qualità** normalizzato *all'interno della stessa sottocategoria FIDA*:
+
+- Un azionario emergenti è confrontato solo con altri azionari emergenti
+- Un europeo solo con altri europei
+- La normalizzazione è z-score (mediana + deviazione standard della categoria)
+
+| Score vs mediana categoria | Alpha stimato |
+|---|---|
+| +2 deviazioni std (top gestore) | +2.0% |
+| +1 deviazione std | +1.0% |
+| Mediano | 0.0% (solo benchmark) |
+| −1 deviazione std | −1.0% |
+| −2 deviazioni std (bottom gestore) | −2.0% |
+
+Il range ±2%/anno è conservativo ma realistico: la letteratura empirica indica che
+i fondi UCITS attivi top-quartile generano 1.5–2.5% di alpha lordo; i bottom-quartile
+sottoperformano di −1.5/−2.5% rispetto al benchmark di categoria.
+""")
+
+        st.markdown("---")
+        st.subheader("La matrice di rischio (Σ)")
+        st.markdown("""
+Per fondi senza serie storica di prezzi (UCITS non quotati), la volatilità e le
+correlazioni sono stimate:
+
+- **Volatilità (σ):** dalla colonna *VOLATILITA' (1 anno)* nel file Excel, con floor
+  minimi per categoria (Azionario ≥ 11%, Obbligazioni ≥ 3%, Bilanciati ≥ 6.5%).
+  Floor applicato per evitare che valori Excel anomali producano portafogli
+  irrealisticamente "sicuri".
+- **Correlazioni:** matrice categoriale basata su correlazioni empiriche UCITS europei
+  (es. Azionario↔Azionario: 0.78, Azionario↔Obbligazionario: −0.10).
+  Per ETF/azioni con serie storica da yfinance: correlazioni reali.
 """)
 
         st.markdown("---")
         st.subheader("⭐ Max Sharpe")
         st.markdown("""
-Il **portafoglio Max Sharpe** massimizza l'**Indice di Sharpe**:
+Massimizza l'**Indice di Sharpe**:
 
-$$\\text{Sharpe} = \\frac{\\text{Rendimento atteso} - \\text{Risk-free rate}}{\\text{Volatilità}}$$
+$$\\text{Sharpe} = \\frac{\\mu_i - r_f}{\\sigma_i}$$
 
-È il portafoglio che offre il **miglior rapporto tra rendimento in eccesso e rischio**.
-Se il risk-free rate è 2.5% e un portafoglio rende 12% con 8% di volatilità:
-Sharpe = (12 - 2.5) / 8 = **1.19**
+dove μᵢ = benchmark sottocategoria + alpha gestore, rᶠ = 2.5% (risk-free), σᵢ = volatilità annua.
 
-**Quando usarlo:** quando vuoi massimizzare il rendimento per unità di rischio.
-Tipicamente adatto a profili Equilibrato/Accrescitivo.
+Con rendimenti attesi realistici e volatilità corrette, un portafoglio 60/40 ben costruito
+dovrebbe produrre Sharpe **0.4 – 0.8** — coerente con la letteratura accademica sul
+lungo periodo.
 
 > Sul grafico: **stella rossa 🔴**
 """)
 
         st.subheader("🛡️ Min Varianza")
         st.markdown("""
-Il **portafoglio Min Varianza** (o Minimum Variance Portfolio) minimizza la
-**volatilità del portafoglio**, indipendentemente dal rendimento.
-
-Sfrutta la **correlazione tra asset**: combinando asset con correlazione bassa o negativa
-si ottiene un portafoglio complessivo meno volatile della media dei suoi componenti.
-
-**Quando usarlo:** quando la priorità è la stabilità del valore. Adatto a profili
-Conservativo/Equilibrato, o quando si è vicini a una necessità di liquidare.
+Minimizza la **volatilità del portafoglio** indipendentemente dal rendimento.
+Sfrutta la correlazione bassa o negativa tra asset class (azionario/obbligazionario)
+per ottenere un portafoglio meno volatile dei singoli componenti.
 
 > Sul grafico: **diamante blu 🔵** — è sempre il punto più a sinistra della frontiera
 """)
 
-        with st.expander("Come impostare i vincoli nell'ottimizzazione"):
+        with st.expander("Vincoli dell'ottimizzazione"):
             st.markdown("""
-**Peso minimo (default 3%):** evita posizioni troppo piccole (transaction costs).
-**Peso massimo (default 30%):** impone diversificazione, evita concentrazione eccessiva.
+**Peso minimo (default 3%):** evita posizioni marginali.
+**Peso massimo (default 30%):** impone diversificazione.
+**Forza inclusione:** peso minimo garantito per un asset specifico.
+**Vincoli asset class:** da Auto-composizione — rispetta le % target per macro classe (±10% tolleranza).
 
-**Forza inclusione:** inserisce un asset con peso minimo garantito (utile per BTP/ETF specifici).
-**Min fondi Azimut:** garantisce la presenza di almeno N fondi Azimut nel portafoglio finale.
-
-**Vincoli asset class:** attivati dall'Auto-composizione — il portafoglio deve rispettare
-le % target per macro classe (±10% di tolleranza).
-""")
-
-        with st.expander("Paraametri configurabili (sidebar)"):
-            st.markdown("""
 | Parametro | Default | Significato |
 |-----------|---------|-------------|
-| **Risk-free rate** | 2.5% | Tasso privo di rischio usato nel calcolo dello Sharpe |
-| **Periodo ottimizzazione** | 3Y | Finestra storica per calcolo rendimenti e covarianza |
-| **Peso minimo** | 3% | Peso minimo per ogni asset nel portafoglio |
-| **Peso massimo** | 30% | Peso massimo per ogni asset nel portafoglio |
+| Risk-free rate | 2.5% | BCE/BTP breve termine |
+| Peso minimo | 3% | Floor per ogni asset |
+| Peso massimo | 30% | Cap per ogni asset |
 """)
 
     # ── TAB 4: BLACK-LITTERMAN ──────────────────────────────────────────────
@@ -3382,43 +3422,48 @@ le % target per macro classe (±10% di tolleranza).
         st.subheader("Black-Litterman — Intuizione")
         st.markdown("""
 Il modello **Black-Litterman** (Fischer Black e Robert Litterman, Goldman Sachs 1990)
-risolve un problema pratico del modello di Markowitz: i rendimenti attesi storici
-sono **molto instabili** e producono portafogli concentrati e poco intuitivi.
+consente di incorporare **view soggettive del gestore** nel modello di ottimizzazione,
+pesandole esplicitamente con un grado di confidenza.
 
-**L'idea:** invece di partire solo dai dati storici, si parte dai **pesi di mercato**
-(capitalizzazione — quanto il mercato stesso "pensa" che valga ogni asset) e poi
-si integrano le **view soggettive** del gestore con una confidenza esplicita.
+**Il prior** usato dall'app sono i benchmark di sottocategoria (gli stessi di Max Sharpe/Min Varianza):
+Azionari Emergenti 9%, Europa 7%, Governativi 2.5%, ecc.
+Le **view** spostano il rendimento atteso di un fondo specifico rispetto al suo benchmark.
 """)
 
         col1b, col2b = st.columns(2)
         with col1b:
             st.markdown("""
-**Come funziona in pratica:**
+**Come funziona:**
 
-1. **Prior (equilibrio):** i pesi di mercato implicano rendimenti attesi di equilibrio
-2. **View:** inserisci la tua aspettativa su uno o più asset
-   - Es: *"Mi aspetto che gli Emergenti rendano 10% l'anno"*
-   - Con confidenza 0.7 (abbastanza sicuro)
-3. **Posterior:** BL combina prior e view → nuovi rendimenti attesi "bayesiani"
+1. **Prior:** benchmark sottocategoria + alpha Score (identico a Max Sharpe)
+2. **View:** inserisci la tua aspettativa su uno o più fondi specifici
+   - *"Mi aspetto che questo fondo emergente renda 11%"* (vs benchmark 9%)
+   - Con confidenza 0.7
+3. **Posterior bayesiano:** BL combina prior e view
+   - Alta confidenza → il portafoglio si sposta verso la view
+   - Bassa confidenza → rimane vicino al prior
 4. **Ottimizzazione:** Max Sharpe sui rendimenti posteriori
 """)
         with col2b:
             st.info("""
-**Quando ha senso usarlo:**
-- Hai una tesi specifica su un settore o area geografica
-- Vuoi "inclinare" il portafoglio verso una view senza abbandonare la diversificazione
-- Es: sovrappeso azionario emergente perché credi alla ripresa cinese
+**Quando usarlo:**
+- Hai una tesi su un settore o gestore specifico
+- Vuoi sovrappesare un'area senza abbandonare la diversificazione
+- Es: sei convinto che un gestore emergenti specifico sovraperformerà
 
 **Quando NON usarlo:**
-- Non hai view specifiche → usa Max Sharpe
-- Le tue view sono già riflesse nel prezzo → il mercato sa già
+- Non hai view specifiche → usa Max Sharpe (stesso prior, nessuna distorsione)
+- Vuoi un portafoglio il più neutro possibile → usa Min Varianza
 """)
 
         st.markdown("""
 **Confidenza:** valore da 0.1 a 1.0.
-- **1.0** = certezza assoluta sulla view → il portafoglio si avvicina molto alla tua aspettativa
-- **0.5** = view moderata → BL bilancia 50/50 tra prior di mercato e tua view
-- **0.1** = view molto incerta → il portafoglio rimane vicino all'equilibrio di mercato
+- **0.9** = view forte → il portafoglio si avvicina molto alla tua aspettativa
+- **0.5** = view moderata → BL bilancia prior e view
+- **0.2** = view debole → rimane vicino al benchmark di categoria
+
+Le view si inseriscono nell'expander **"Inserisci view Black-Litterman"** nella sezione
+Frontiera Efficiente, selezionando il fondo e il rendimento atteso in %.
 
 > Sul grafico: **pentagono verde 🟢** — appare solo se BL è abilitato con almeno una view
 """)
@@ -3461,12 +3506,15 @@ Puoi **bloccare** un fondo (rimane nel portafoglio indipendentemente dallo score
 
         with st.expander("📈 Regole Frontiera Efficiente"):
             st.markdown("""
-- **Minimo 3 asset, massimo 30** per avere una frontiera significativa
-- **Matrice di covarianza:** Ledoit-Wolf shrinkage (riduce l'instabilità della covarianza campionaria)
-- **Rendimenti attesi:** media storica annualizzata (frequenza mensile × 12)
-- **Monte Carlo:** 5.000 portafogli casuali per visualizzare lo spazio delle possibilità
+- **Minimo 3 asset** per avere una frontiera significativa
+- **Rendimenti attesi (μ):** benchmark sottocategoria FIDA + alpha da Score Qualità (±2%/anno)
+  — *non rendimenti storici*. Vedere tab "Frontiera Efficiente" per il dettaglio.
+- **Volatilità (σ):** da colonna Excel con floor categoriali (Equity ≥ 11%, Bond ≥ 3%, Bilanciati ≥ 6.5%)
+- **Correlazioni:** empiriche da yfinance per ETF/azioni; categoriali per fondi UCITS
+- **Monte Carlo:** 4.000 portafogli casuali per visualizzare lo spazio delle possibilità
 - **Frontiera:** 50 punti da Min Varianza a Max Rendimento
 - **Vincoli settoriali (Auto-composizione):** ±10% di tolleranza sul target di asset class
+- **Alpha range:** ±2%/anno — coerente con letteratura empirica fondi UCITS attivi europei
 """)
 
         with st.expander("🔮 Regole Black-Litterman"):
