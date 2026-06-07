@@ -1039,9 +1039,31 @@ elif nav == "📈 Frontiera Efficiente":
                 _it = [i for i in ITALIAN_STOCKS if not i.startswith("IT_BTP")][:4]
                 _az_sel = list(dict.fromkeys(_az_sel + _it))
             _all_sel = list(dict.fromkeys(_az_sel + _ob_sel + _bi_sel + _mp_sel))
+            _n_min_az_int = int(_n_min_az)
             _all_sel, _az_forced = _inject_azimut(
-                _all_sel, int(_n_min_az), az_sel=_az_sel, ob_sel=_ob_sel
+                _all_sel, _n_min_az_int, az_sel=_az_sel, ob_sel=_ob_sel
             )
+
+        # Debug Azimut (solo se richiesto)
+        if _n_min_az_int > 0:
+            _az_in_sel = [i for i in _all_sel if _all_fund_pool.get(i, {}).get("_source") == "azimut"]
+            _az_status_col, _ = st.columns([2, 1])
+            if _az_in_sel:
+                _az_status_col.success(
+                    f"✅ {len(_az_in_sel)} fondo/i Azimut incluso/i: "
+                    + ", ".join(str(_all_fund_pool.get(i,{}).get("nome",i))[:30] for i in _az_in_sel[:3])
+                )
+            else:
+                _az_detail = (
+                    f"df_azimut vuoto" if df_azimut.empty
+                    else f"df_azimut: {len(df_azimut)} righe, ISIN col: "
+                         f"{'ISIN' if 'ISIN' in df_azimut.columns else list(df_azimut.columns)[:4]}, "
+                         f"forced={_az_forced}"
+                )
+                _az_status_col.warning(
+                    f"⚠️ Nessun fondo Azimut trovato (richiesti {_n_min_az_int}). "
+                    f"Dettaglio: {_az_detail}"
+                )
 
         st.session_state["fe_selected_isins"] = _all_sel
         st.session_state["fe_ac_map"] = (
@@ -1285,7 +1307,8 @@ elif nav == "📈 Frontiera Efficiente":
         _ms_sh   = ms.get("sharpe", 0) if ms and "error" not in ms else 0
 
         # Degenere = dati piatti O errore ottimizzatore
-        _is_degenerate = ("error" in (ms or {})) or abs(_ms_ret) < 0.02
+        # Degenere solo se c'è errore esplicito o rendimento praticamente nullo (< 0.1%)
+        _is_degenerate = ("error" in (ms or {})) or abs(_ms_ret) < 0.001
 
         if _is_degenerate:
             if _ms_err:
