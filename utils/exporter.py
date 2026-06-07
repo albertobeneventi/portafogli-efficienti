@@ -16,7 +16,7 @@ import pandas as pd
 
 try:
     from reportlab.lib import colors
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
     from reportlab.platypus import (
@@ -370,10 +370,12 @@ def export_portfolio_pdf(
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
-        buf, pagesize=A4,
+        buf, pagesize=landscape(A4),
         rightMargin=1.8 * cm, leftMargin=1.8 * cm,
-        topMargin=2 * cm, bottomMargin=2 * cm,
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
     )
+    # Larghezza utile ≈ 29.7 - 3.6 = 26.1 cm
+    _PAGE_W = 26.1 * cm
     styles = getSampleStyleSheet()
 
     def _p(name, **kw):
@@ -406,7 +408,7 @@ def export_portfolio_pdf(
     if chart_bytes:
         story.append(Paragraph("Frontiera Efficiente", h1_style))
         try:
-            img = Image(io.BytesIO(chart_bytes), width=17.4 * cm, height=9 * cm)
+            img = Image(io.BytesIO(chart_bytes), width=24.0 * cm, height=10 * cm)
             story.append(img)
             story.append(Paragraph(
                 _safe_str("Curva blu = frontiera efficiente  |  "
@@ -448,7 +450,7 @@ def export_portfolio_pdf(
         m_data = [["Metrica", "Valore"]]
         for k, v in m_dict.items():
             m_data.append([_safe_str(str(k)), _safe_str(str(v))])
-        mt = Table(m_data, colWidths=[9 * cm, 7 * cm])
+        mt = Table(m_data, colWidths=[12 * cm, 9 * cm])
         mt.setStyle(TableStyle([
             ("BACKGROUND",    (0, 0), (-1, 0), NAVY_RL),
             ("TEXTCOLOR",     (0, 0), (-1, 0), colors.white),
@@ -472,10 +474,10 @@ def export_portfolio_pdf(
         )
         if has_stars:
             hdr   = ["ISIN", "Nome / Fondo", "Asset Class", "Peso %", "★ FIDA", "Perf 3Y %"]
-            col_w = [2.6 * cm, 5.8 * cm, 3.4 * cm, 1.6 * cm, 1.6 * cm, 1.8 * cm]
+            col_w = [2.8 * cm, 10.5 * cm, 6.0 * cm, 2.0 * cm, 2.2 * cm, 2.2 * cm]
         else:
             hdr   = ["ISIN", "Nome / Fondo", "Asset Class", "Peso %", "Perf 3Y %"]
-            col_w = [2.8 * cm, 7.2 * cm, 3.8 * cm, 1.8 * cm, 2.2 * cm]
+            col_w = [2.8 * cm, 12.5 * cm, 7.0 * cm, 2.0 * cm, 2.4 * cm]
 
         w_data = [hdr]
         for isin, w in sorted(w_dict.items(), key=lambda x: -x[1]):
