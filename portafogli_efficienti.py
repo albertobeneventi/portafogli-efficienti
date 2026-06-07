@@ -1396,6 +1396,34 @@ elif nav == "📈 Frontiera Efficiente":
             _rc3.info("3️⃣ Ri-seleziona i fondi e ricalcola")
             st.stop()  # Non mostrare il grafico degenere
 
+        # ── Calcolo portafoglio manuale (da session_state) ───────────────
+        _manual_weights_raw = st.session_state.get("fe_manual_weights", {})
+        _mu_dict  = result.get("mu", {})
+        _cov_dict = result.get("cov", {})
+        _manual_point = None
+        if _manual_weights_raw and _mu_dict and _cov_dict:
+            try:
+                import numpy as _np
+                _man_assets = [i for i in _manual_weights_raw
+                               if i in _mu_dict and _manual_weights_raw[i] > 0]
+                if len(_man_assets) >= 2:
+                    _w = _np.array([_manual_weights_raw[i]/100 for i in _man_assets])
+                    _w = _w / _w.sum()  # normalizza
+                    _mu_arr = _np.array([_mu_dict[i] for i in _man_assets])
+                    _cov_df = pd.DataFrame(_cov_dict).reindex(index=_man_assets, columns=_man_assets).fillna(0)
+                    _cov_mat = _cov_df.values
+                    _man_ret = float(_w @ _mu_arr)
+                    _man_vol = float(_np.sqrt(_w @ _cov_mat @ _w))
+                    _man_sharpe = round((_man_ret - rfr) / _man_vol, 3) if _man_vol > 0 else 0
+                    _manual_point = {
+                        "ret": round(_man_ret * 100, 2),
+                        "vol": round(_man_vol * 100, 2),
+                        "sharpe": _man_sharpe,
+                        "weights": {i: round(_w[j]*100,1) for j,i in enumerate(_man_assets)},
+                    }
+            except Exception:
+                _manual_point = None
+
         # ── Grafico Frontiera Efficiente — stile Markowitz classico ─────
         fig_fe = go.Figure()
         mc       = result.get("monte_carlo", pd.DataFrame())
@@ -1625,6 +1653,38 @@ elif nav == "📈 Frontiera Efficiente":
                 ),
             ))
 
+        # ── 8. Il tuo portafoglio manuale ────────────────────────────────
+        if _manual_point:
+            _mp_v = _manual_point["vol"]
+            _mp_r = _manual_point["ret"]
+            _mp_s = _manual_point["sharpe"]
+            fig_fe.add_trace(go.Scatter(
+                x=[_mp_v], y=[_mp_r],
+                mode="markers",
+                marker=dict(color="#F97316", size=18, symbol="circle",
+                            line=dict(color="white", width=2.5)),
+                name=f"🟠 Il tuo portafoglio (Vol {_mp_v:.1f}%  Rend {_mp_r:.1f}%  Sharpe {_mp_s})",
+                hovertemplate=(
+                    "<b>Il tuo portafoglio</b><br>"
+                    "Vol: <b>%{x:.2f}%</b><br>"
+                    "Rend: <b>%{y:.2f}%</b><br>"
+                    f"Sharpe: <b>{_mp_s}</b>"
+                    "<extra></extra>"
+                ),
+            ))
+            _annotations.append(dict(
+                x=_mp_v, y=_mp_r,
+                ax=-65, ay=50,
+                xref="x", yref="y", axref="pixel", ayref="pixel",
+                text=f"<b style='color:#F97316'>Il tuo portafoglio</b><br>"
+                     f"Rend {_mp_r:.1f}% · Vol {_mp_v:.1f}%<br>"
+                     f"Sharpe {_mp_s}",
+                showarrow=True,
+                arrowhead=2, arrowwidth=1.5, arrowcolor="#F97316",
+                font=dict(size=10), bgcolor="white",
+                bordercolor="#F97316", borderwidth=1.5, borderpad=4,
+            ))
+
         # ── Layout ────────────────────────────────────────────────────────
         fig_fe.update_layout(
             title=dict(
@@ -1693,6 +1753,88 @@ elif nav == "📈 Frontiera Efficiente":
 **Nuvola di punti grigi:** migliaia di portafogli casuali (simulazione Monte Carlo).
 Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionati.
 """)
+
+        # ── Sezione "Il tuo portafoglio" ─────────────────────────────────
+        st.markdown("---")
+        with st.expander("🟠 Costruisci il tuo portafoglio e confrontalo con la frontiera", expanded=False):
+            _assets_for_manual = result.get("assets", sel_isins or [])
+            if not _assets_for_manual:
+                st.info("Esegui prima il calcolo della frontiera.")
+            else:
+                st.markdown(
+                    "Imposta i pesi desiderati per ogni strumento. "
+                    "Il punto 🟠 apparirà sul grafico (ricarica dopo aver salvato i pesi)."
+                )
+                # Form con sliders
+                with st.form("manual_portfolio_form"):
+                    _n_man = len(_assets_for_manual)
+                    _default_w = 100.0 / _n_man
+                    _prev_manual = st.session_state.get("fe_manual_weights", {})
+                    _new_weights = {}
+                    # Mostra slider in 2 colonne
+                    _mc1, _mc2 = st.columns(2)
+                    for _idx, _isin in enumerate(_assets_for_manual):
+                        _nome_m = str(_all_fund_pool.get(_isin, {}).get("nome", _isin))[:40]
+                        _prev_w = _prev_manual.get(_isin, round(_default_w, 1))
+                        _col = _mc1 if _idx % 2 == 0 else _mc2
+                        _new_weights[_isin] = _col.slider(
+                            f"{_nome_m}",
+                            min_value=0.0, max_value=100.0,
+                            value=float(_prev_w), step=0.5,
+                            key=f"man_w_{_isin}",
+                        )
+                    _tot_manual = sum(_new_weights.values())
+                    st.caption(f"Totale pesi: **{_tot_manual:.1f}%** {'✅' if abs(_tot_manual-100)<0.5 else '⚠️ normalizzati automaticamente a 100%'}")
+                    _save_manual = st.form_submit_button("💾 Salva pesi e aggiorna grafico", type="primary")
+                    if _save_manual:
+                        st.session_state["fe_manual_weights"] = _new_weights
+                        st.rerun()
+
+                # Tabella di confronto (se punto manuale disponibile)
+                if _manual_point:
+                    st.subheader("📊 Confronto: Il tuo portafoglio vs Ottimizzati")
+                    _ms_cmp = {"Rendimento": f"{ms['ret']*100:.2f}%" if ms and 'ret' in ms else "-",
+                               "Volatilità": f"{ms['vol']*100:.2f}%" if ms and 'vol' in ms else "-",
+                               "Sharpe": f"{ms.get('sharpe',0):.3f}" if ms else "-"}
+                    _mv_cmp_d = result.get("min_variance", {})
+                    _mv_cmp = {"Rendimento": f"{_mv_cmp_d['ret']*100:.2f}%" if _mv_cmp_d and 'ret' in _mv_cmp_d else "-",
+                               "Volatilità": f"{_mv_cmp_d['vol']*100:.2f}%" if _mv_cmp_d and 'vol' in _mv_cmp_d else "-",
+                               "Sharpe": f"{_mv_cmp_d.get('sharpe',0):.3f}" if _mv_cmp_d else "-"}
+                    _cmp_df = pd.DataFrame({
+                        "🟠 Il tuo portafoglio": {
+                            "Rendimento atteso": f"{_manual_point['ret']:.2f}%",
+                            "Volatilità (rischio)": f"{_manual_point['vol']:.2f}%",
+                            "Indice di Sharpe": str(_manual_point["sharpe"]),
+                        },
+                        "⭐ Max Sharpe (ottimizzato)": {
+                            "Rendimento atteso": _ms_cmp["Rendimento"],
+                            "Volatilità (rischio)": _ms_cmp["Volatilità"],
+                            "Indice di Sharpe": _ms_cmp["Sharpe"],
+                        },
+                        "◆ Min Varianza (ottimizzato)": {
+                            "Rendimento atteso": _mv_cmp["Rendimento"],
+                            "Volatilità (rischio)": _mv_cmp["Volatilità"],
+                            "Indice di Sharpe": _mv_cmp["Sharpe"],
+                        },
+                    })
+                    st.dataframe(_cmp_df, use_container_width=True)
+
+                    # Pesi del portafoglio manuale
+                    st.markdown("**Composizione del tuo portafoglio (normalizzata):**")
+                    _man_w_rows = []
+                    for _isin, _w_pct in sorted(_manual_point["weights"].items(), key=lambda x: -x[1]):
+                        _info_m = _all_fund_pool.get(_isin, {})
+                        _man_w_rows.append({
+                            "ISIN": _isin,
+                            "Nome": str(_info_m.get("nome", _isin))[:50],
+                            "Peso %": _w_pct,
+                        })
+                    st.dataframe(pd.DataFrame(_man_w_rows), use_container_width=True, hide_index=True)
+
+                    _btn_reset = st.button("🗑️ Rimuovi il tuo portafoglio dal grafico")
+                    if _btn_reset:
+                        st.session_state.pop("fe_manual_weights", None)
+                        st.rerun()
 
         # Pesi + correlazioni affiancati
         st.subheader("📋 Composizione portafogli")
