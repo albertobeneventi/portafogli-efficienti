@@ -765,15 +765,15 @@ elif nav == "📈 Frontiera Efficiente":
                        az_sel: list | None = None,
                        ob_sel: list | None = None) -> tuple:
         """
-        Inietta min n_min fondi Azimut nella selezione.
-        Legge df_azimut direttamente, calcola score, seleziona i migliori
-        proporzionalmente ai bucket richiesti (Azioni / Obbligazioni).
+        Sostituisce n_min fondi terzi con fondi Azimut (il totale NON aumenta).
+        Deduplicazione per nome fondo (classi diverse dello stesso fondo → prende la migliore).
         """
         if n_min <= 0:
             return selected, []
         if df_azimut.empty:
             return selected, []
 
+        import re as _re
         from utils.data_loader import AZIMUT_COLS as _ACOLS
         from utils.scoring import compute_score as _cscore
 
@@ -787,93 +787,114 @@ elif nav == "📈 Frontiera Efficiente":
         if _c_isin not in df_azimut.columns:
             return selected, []
 
-        # ── Costruisce pool Azimut con score ──────────────────────────────
-        _az_pool = []
+        # Chiave di deduplicazione: prime 4 parole significative del nome
+        _AZ_STOP = {"a","b","c","d","e","f","p","r","i","ii","iii","iv",
+                    "acc","eur","usd","gbp","chf","inc","cap","ret","dist",
+                    "class","cl","fund","sicav","az"}
+        def _az_key(nome):
+            words = _re.sub(r"[^a-z0-9\s]", " ", str(nome).lower()).split()
+            mw = [w for w in words if w not in _AZ_STOP and len(w) > 1]
+            return " ".join(mw[:4])
+
+        # ── Costruisce pool Azimut deduplicato per nome fondo ─────────────
+        _best_by_name: dict = {}
         for _, _r in df_azimut.iterrows():
             _isin_r = str(_r.get(_c_isin, "") or "").strip()
             if not _isin_r or len(_isin_r) < 8:
                 continue
+            _nome_r = str(_r.get(_c_nome, _isin_r) or _isin_r)
             try:
-                _p3  = float(_r.get(_c_p3, 0) or 0)
-                _p1  = float(_r.get(_c_p1, 0) or 0)
+                _p3   = float(_r.get(_c_p3, 0) or 0)
+                _p1   = float(_r.get(_c_p1, 0) or 0)
                 _fida = _r.get(_c_fida)
-                _sc  = _cscore(_p3, _p1, volatility=0.0, fida_stars=_fida)
+                _sc   = _cscore(_p3, _p1, volatility=0.0, fida_stars=_fida)
             except Exception:
                 _sc = 0.0
-            _cl = str(_r.get(_c_cl, "") or "")
+            _cl    = str(_r.get(_c_cl, "") or "")
             _macro = _macro_from_class(_cl) or "Altro"
-            _az_pool.append({
-                "isin": _isin_r,
-                "nome": str(_r.get(_c_nome, _isin_r)),
-                "casa": "Azimut",
+            _entry = {
+                "isin": _isin_r, "nome": _nome_r, "casa": "Azimut",
                 "classificazione": _cl,
                 "perf_3y": float(_r.get(_c_p3, 0) or 0),
                 "perf_1y": float(_r.get(_c_p1, 0) or 0),
-                "volatilita": None,
-                "rating_fida": _fida,
-                "score_qualita": _sc,
-                "_source": "azimut",
-                "_macro": _macro,
-            })
+                "volatilita": None, "rating_fida": _fida,
+                "score_qualita": _sc, "_source": "azimut", "_macro": _macro,
+            }
+            _k = _az_key(_nome_r)
+            if _k not in _best_by_name or _sc > _best_by_name[_k]["score_qualita"]:
+                _best_by_name[_k] = _entry
 
+        _az_pool = sorted(_best_by_name.values(), key=lambda x: x["score_qualita"], reverse=True)
         if not _az_pool:
             return selected, []
 
-        # Ordina per score
-        _az_pool.sort(key=lambda x: x["score_qualita"], reverse=True)
-
-        # ── Conta quanti Azimut già presenti in selected ───────────────────
-        _sel_set   = set(selected)
-        _az_isins  = {d["isin"] for d in _az_pool}
+        # ── Conta Azimut già presenti in selected ─────────────────────────
+        _az_isins   = {d["isin"] for d in _az_pool}
         _az_already = [i for i in selected if i in _az_isins]
         _need       = n_min - len(_az_already)
 
         _result = list(selected)
         _forced = list(_az_already[:n_min])
 
+        # Aggiorna pool per quelli già presenti
+        for _entry in _az_pool:
+            if _entry["isin"] in set(selected):
+                _pool_add(_entry["isin"], _entry)
+
         if _need <= 0:
-            # Già abbastanza Azimut; aggiorna solo pool
-            for _entry in _az_pool:
-                if _entry["isin"] in _sel_set:
-                    _pool_add(_entry["isin"], _entry)
             return _result, _forced
 
-        # ── Seleziona nuovi Azimut per macro-bucket ────────────────────────
-        # Proporzione: usa la distribuzione dei bucket richiesti
+        # ── Quota per bucket (Azioni / Obbligazioni) ──────────────────────
         _n_az_bucket = len(az_sel or [])
         _n_ob_bucket = len(ob_sel or [])
         _tot_req     = max(_n_az_bucket + _n_ob_bucket, 1)
-        # Quanti Azimut "azioni" vs "obbligazioni" aggiungere
         _n_az_to_add = round(_need * _n_az_bucket / _tot_req)
         _n_ob_to_add = _need - _n_az_to_add
 
-        _added = 0
-        for _bucket, _quota in [("Azioni", _n_az_to_add), ("Obbligazioni", _n_ob_to_add)]:
-            _q = _quota
+        def _replace_with_azimut(bucket_list, quota, macro_filter):
+            """Sostituisce 'quota' fondi terzi del bucket con fondi Azimut del macro corrispondente."""
+            _q = quota
+            _added_local = 0
+            # Fondi terzi sostituibili: in bucket_list, non Azimut, non già forzati
+            _replaceable = [i for i in (bucket_list or [])
+                            if i in _result and i not in _az_isins and i not in _forced]
             for _entry in _az_pool:
-                if _q <= 0:
+                if _q <= 0 or not _replaceable:
                     break
                 if _entry["isin"] in _result:
                     continue
-                if _entry["_macro"] == _bucket:
-                    _result.append(_entry["isin"])
-                    _forced.append(_entry["isin"])
-                    _pool_add(_entry["isin"], _entry)
-                    _q -= 1
-                    _added += 1
+                if _entry["_macro"] != macro_filter:
+                    continue
+                # Rimuovi l'ultimo terzo del bucket (il meno prioritario)
+                _out = _replaceable.pop()
+                _result.remove(_out)
+                _result.append(_entry["isin"])
+                _forced.append(_entry["isin"])
+                _pool_add(_entry["isin"], _entry)
+                _q -= 1
+                _added_local += 1
+            return _added_local
 
-        # Se non abbastanza per bucket specifico, prendi i migliori rimasti
+        _added  = _replace_with_azimut(az_sel, _n_az_to_add, "Azioni")
+        _added += _replace_with_azimut(ob_sel, _n_ob_to_add, "Obbligazioni")
+
+        # Quota residua: sostituisce qualsiasi terzo (bucket misto o Mat. Prime)
         _still_need = _need - _added
-        for _entry in _az_pool:
-            if _still_need <= 0:
-                break
-            if _entry["isin"] not in _result:
+        if _still_need > 0:
+            _any_replaceable = [i for i in _result if i not in _az_isins and i not in _forced]
+            for _entry in _az_pool:
+                if _still_need <= 0 or not _any_replaceable:
+                    break
+                if _entry["isin"] in _result:
+                    continue
+                _out = _any_replaceable.pop()
+                _result.remove(_out)
                 _result.append(_entry["isin"])
                 _forced.append(_entry["isin"])
                 _pool_add(_entry["isin"], _entry)
                 _still_need -= 1
 
-        # Assicura pool per tutti gli Azimut iniettati
+        # Aggiorna sorgente pool per tutti gli iniettati
         for _isin in _forced:
             if _isin not in _all_fund_pool:
                 _rw = df_unified[df_unified["isin"] == _isin] if not df_unified.empty else pd.DataFrame()
@@ -885,15 +906,27 @@ elif nav == "📈 Frontiera Efficiente":
 
         return _result, _forced
 
-    # Conteggio fondi Azimut disponibili
+    # Conteggio fondi Azimut disponibili (deduplicato per nome fondo)
     _n_az_avail = 0
     try:
         if not df_azimut.empty:
-            _n_az_avail = len(df_azimut)
+            import re as _re2
+            _AZ_STOP2 = {"a","b","c","d","e","f","p","r","i","ii","iii","iv",
+                         "acc","eur","usd","gbp","chf","inc","cap","ret","dist",
+                         "class","cl","fund","sicav","az"}
+            _c_nome2 = "FONDO AZIMUT"
+            if _c_nome2 in df_azimut.columns:
+                _names = df_azimut[_c_nome2].dropna().astype(str)
+                def _az_key2(n):
+                    w = _re2.sub(r"[^a-z0-9\s]"," ",n.lower()).split()
+                    return " ".join([x for x in w if x not in _AZ_STOP2 and len(x)>1][:4])
+                _n_az_avail = _names.apply(_az_key2).nunique()
+            else:
+                _n_az_avail = len(df_azimut)
         elif not df_unified.empty and "_source" in df_unified.columns:
             _n_az_avail = int((df_unified["_source"]=="azimut").sum())
     except Exception:
-        pass
+        _n_az_avail = 0 if df_azimut.empty else len(df_azimut)
 
     # =========================================================================
     # FORM GUIDATO
@@ -1089,9 +1122,19 @@ elif nav == "📈 Frontiera Efficiente":
                 _info = _all_fund_pool.get(_isin, {})
                 _fonte = ("Azimut" if _info.get("_source")=="azimut"
                           else "ETF" if _isin in _etf_set else "Terzi")
-                _macro_lbl = ("Azioni" if _isin in _az_sel else
-                              "Obbligazioni" if _isin in _ob_sel else
-                              "Bilanciato" if _isin in _bi_sel else "Mat. Prime")
+                # Per fondi Azimut iniettati (non in az_sel/ob_sel originali) usa il macro dal pool
+                if _isin in set(_az_sel or []):
+                    _macro_lbl = "Azioni"
+                elif _isin in set(_ob_sel or []):
+                    _macro_lbl = "Obbligazioni"
+                elif _isin in set(_bi_sel or []):
+                    _macro_lbl = "Bilanciato"
+                elif _isin in set(_mp_sel or []):
+                    _macro_lbl = "Mat. Prime"
+                else:
+                    # Azimut iniettato in sostituzione: recupera macro dal pool
+                    _pool_macro = _all_fund_pool.get(_isin, {}).get("_macro", "")
+                    _macro_lbl = _pool_macro if _pool_macro else "Mat. Prime"
                 _prev_rows.append({
                     "Asset Class": _macro_lbl, "Fonte": _fonte, "ISIN": _isin,
                     "Nome": str(_info.get("nome", _isin))[:52],
