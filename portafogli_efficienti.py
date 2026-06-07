@@ -1511,7 +1511,7 @@ elif nav == "📈 Frontiera Efficiente":
             fig_fe.add_shape(
                 type="line",
                 x0=x_range[0], x1=_mv_v,
-                y0=_mv_r,     y1=_mv_r,
+                y0=_mv_r, y1=_mv_r,
                 line=dict(color="#64748B", width=1.5, dash="dash"),
             )
             fig_fe.add_trace(go.Scatter(
@@ -1519,35 +1519,62 @@ elif nav == "📈 Frontiera Efficiente":
                 mode="markers",
                 marker=dict(color="#1D4ED8", size=14, symbol="diamond",
                             line=dict(color="white", width=2)),
-                name=f"Min Varianza  (Vol {_mv_v:.1f}%  Rend {_mv_r:.1f}%)",
+                name=f"◆ Min Varianza — rischio minimo (Vol {_mv_v:.1f}%  Rend {_mv_r:.1f}%)",
                 hovertemplate=(
                     "<b>Minima Varianza</b><br>"
+                    "Rischio minimo raggiungibile<br>"
                     "Vol: <b>%{x:.2f}%</b><br>"
                     "Rend: <b>%{y:.2f}%</b>"
                     "<extra></extra>"
                 ),
             ))
-            # Etichetta "Tratto efficiente" e "Tratto inefficiente" come annotation
+
             if not frontier.empty:
-                _fr_max_r = float(frontier["ret"].max()) * 100
+                _fr_sorted   = frontier.sort_values("ret")
+                _fr_max_r    = float(_fr_sorted["ret"].max()) * 100
+                _fr_max_v    = float(_fr_sorted.loc[_fr_sorted["ret"].idxmax(), "vol"]) * 100
+                # Punto nel 75° percentile della frontiera = zona efficiente alta
+                _fr_q75      = _fr_sorted.iloc[int(len(_fr_sorted)*0.75)]
+                _eff_v       = round(float(_fr_q75["vol"]) * 100, 2)
+                _eff_r       = round(float(_fr_q75["ret"]) * 100, 2)
+
+                # Freccia "Tratto EFFICIENTE" → punta su frontiera in zona alta
                 _annotations.append(dict(
-                    x=_mv_v + (x_range[1]-_mv_v)*0.5,
-                    y=(_mv_r + _fr_max_r) / 2,
-                    text="<b>Tratto efficiente</b>",
-                    showarrow=False,
-                    font=dict(size=12, color=NAVY),
-                    bgcolor="rgba(255,255,255,0.75)",
-                    bordercolor=NAVY, borderwidth=1, borderpad=4,
+                    x=_eff_v, y=_eff_r,
+                    ax=-80, ay=30,
+                    xref="x", yref="y", axref="pixel", ayref="pixel",
+                    text="<b style='color:#1A2C54'>▲ Tratto EFFICIENTE</b><br>"
+                         "<span style='font-size:10px;color:#444'>"
+                         "Massimo rendimento per ogni livello di rischio.<br>"
+                         "Zona dove punta l'ottimizzatore.</span>",
+                    showarrow=True,
+                    arrowhead=2, arrowwidth=1.5, arrowcolor=NAVY,
+                    font=dict(size=10), bgcolor="rgba(255,255,255,0.92)",
+                    bordercolor=NAVY, borderwidth=1.5, borderpad=5,
+                    align="left",
                 ))
-                _annotations.append(dict(
-                    x=_mv_v + (x_range[1]-_mv_v)*0.35,
-                    y=_mv_r - (_fr_max_r - _mv_r) * 0.35,
-                    text="<i>Tratto inefficiente</i>",
-                    showarrow=False,
-                    font=dict(size=11, color="#64748B"),
-                    bgcolor="rgba(255,255,255,0.75)",
-                    bordercolor="#94A3B8", borderwidth=1, borderpad=3,
-                ))
+
+                # Punto nel 25° percentile sotto Min Var = zona inefficiente
+                if not mc.empty:
+                    _mc_low = mc[mc["ret"]*100 < _mv_r].copy()
+                    if len(_mc_low) > 5:
+                        _mc_low_med = _mc_low.nsmallest(max(3, len(_mc_low)//4), "ret")
+                        _ineff_v = round(float(_mc_low_med["vol"].median()) * 100, 2)
+                        _ineff_r = round(float(_mc_low_med["ret"].median()) * 100, 2)
+                        _annotations.append(dict(
+                            x=_ineff_v, y=_ineff_r,
+                            ax=60, ay=40,
+                            xref="x", yref="y", axref="pixel", ayref="pixel",
+                            text="<i style='color:#64748B'>▼ Tratto INEFFICIENTE</i><br>"
+                                 "<span style='font-size:9px;color:#888'>"
+                                 "Stesso rischio, rendimento inferiore al tratto<br>"
+                                 "efficiente. Nessun investitore razionale lo sceglie.</span>",
+                            showarrow=True,
+                            arrowhead=2, arrowwidth=1, arrowcolor="#94A3B8",
+                            font=dict(size=9), bgcolor="rgba(255,255,255,0.85)",
+                            bordercolor="#94A3B8", borderwidth=1, borderpad=4,
+                            align="left",
+                        ))
 
         # ── 6. Max Sharpe ─────────────────────────────────────────────────
         if ms and "error" not in ms and ms.get("vol"):
@@ -1637,6 +1664,35 @@ elif nav == "📈 Frontiera Efficiente":
             "modeBarButtonsToRemove": ["select2d", "lasso2d"],
             "toImageButtonOptions": {"format": "png", "width": 1200, "height": 700},
         })
+
+        # Legenda esplicativa
+        with st.expander("📖 Come leggere il grafico", expanded=False):
+            st.markdown("""
+**Asse X — Rischio (Volatilità σ):** quanto oscilla il portafoglio. Più è a destra, più è rischioso.
+
+**Asse Y — Rendimento atteso E(Rp):** il rendimento annualizzato stimato. Più è in alto, meglio.
+
+---
+
+**🔵 Tratto EFFICIENTE** *(linea blu continua, sopra il diamante)*
+> Per ogni livello di rischio scelto, offre il **massimo rendimento possibile**.
+> L'ottimizzatore punta sempre su questa zona. Il punto ★ Max Sharpe è il rapporto rendimento/rischio migliore.
+
+**⚫ Tratto INEFFICIENTE** *(linea tratteggiata, sotto il diamante)*
+> Portafogli con lo **stesso rischio ma rendimento inferiore** a quelli efficienti.
+> Un investitore razionale non li sceglie mai: c'è sempre un'alternativa migliore sul tratto superiore.
+
+**◆ Min Varianza** *(diamante blu)*
+> Il portafoglio col **rischio più basso in assoluto** tra tutti i possibili.
+> Separa la zona efficiente (sopra) da quella inefficiente (sotto).
+
+**⭐ Max Sharpe** *(stella rossa)*
+> Il portafoglio col miglior **rapporto rendimento/rischio** (Indice di Sharpe).
+> È il punto selezionato dall'app come portafoglio principale.
+
+**Nuvola di punti grigi:** migliaia di portafogli casuali (simulazione Monte Carlo).
+Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionati.
+""")
 
         # Pesi + correlazioni affiancati
         st.subheader("📋 Composizione portafogli")
