@@ -1030,10 +1030,65 @@ elif nav == "📈 Frontiera Efficiente":
             ]
             st.rerun()
 
+    # ── View Black-Litterman manuali ─────────────────────────────────────
+    with st.expander("🔮 View Black-Litterman (opzionale)", expanded=False):
+        st.caption(
+            "Inserisci le tue aspettative di rendimento per singoli strumenti. "
+            "Lascia vuoto per usare le view automatiche (basate su Score Qualità). "
+            "Le view si applicano come rendimento extra atteso rispetto al mercato."
+        )
+        _bl_sel = st.session_state.get("fe_selected_isins", [])
+        _prev_bl_views = st.session_state.get("fe_bl_views_manual", {})
+        if not _bl_sel:
+            st.info("Esegui prima la selezione strumenti (premi 'Calcola portafoglio').")
+        else:
+            _bl_new_views = {}
+            _bl_new_confs = {}
+            _bl_cols = st.columns(2)
+            for _bi, _bisin in enumerate(_bl_sel):
+                _bname = str(_all_fund_pool.get(_bisin, {}).get("nome", _bisin))[:38]
+                _bcol  = _bl_cols[_bi % 2]
+                _prev_view = _prev_bl_views.get(_bisin, {}).get("view", 0.0)
+                _prev_conf = _prev_bl_views.get(_bisin, {}).get("conf", 50)
+                _bview = _bcol.number_input(
+                    f"{_bname}",
+                    min_value=-50.0, max_value=100.0, value=float(_prev_view), step=0.5,
+                    format="%.1f", key=f"bl_view_{_bisin}",
+                    help="Rendimento atteso annuo (%) — 0 = neutro / nessuna view"
+                )
+                _bconf = _bcol.slider(
+                    "Confidenza %", 10, 100, int(_prev_conf), 10,
+                    key=f"bl_conf_{_bisin}",
+                )
+                if abs(_bview) > 0.01:
+                    _bl_new_views[_bisin] = _bview / 100
+                    _bl_new_confs[_bisin] = _bconf / 100
+
+            _bl_save_col, _bl_reset_col = st.columns(2)
+            if _bl_save_col.button("💾 Salva view BL", key="bl_save"):
+                st.session_state["fe_bl_views_manual"] = {
+                    _bisin: {"view": _bl_new_views.get(_bisin, 0), "conf": int(_bl_new_confs.get(_bisin,0)*100)}
+                    for _bisin in _bl_sel if _bisin in _bl_new_views
+                }
+                st.session_state["fe_bl_views_dict"]  = _bl_new_views
+                st.session_state["fe_bl_confs_dict"]  = _bl_new_confs
+                st.toast(f"✅ {len(_bl_new_views)} view salvate — ricalcola per applicarle")
+            if _bl_reset_col.button("🗑️ Azzera view", key="bl_reset_views"):
+                for _k2 in ["fe_bl_views_manual","fe_bl_views_dict","fe_bl_confs_dict"]:
+                    st.session_state.pop(_k2, None)
+                st.toast("View BL azzerate — si useranno le view automatiche")
+
+    # Leggi views manuali per passarle all'optimizer
+    if st.session_state.get("fe_bl_views_dict"):
+        use_bl  = True
+        bl_views = st.session_state["fe_bl_views_dict"]
+        bl_conf  = st.session_state.get("fe_bl_confs_dict", {})
+
     # Reset
     if _reset_btn:
         for _k in ["fe_result","fe_price_dict","bl_result","bl_views_used",
-                   "fe_selected_isins","fe_ac_map","fe_ac_target","_fe_form_vals"]:
+                   "fe_selected_isins","fe_ac_map","fe_ac_target","_fe_form_vals",
+                   "fe_bl_views_manual","fe_bl_views_dict","fe_bl_confs_dict"]:
             st.session_state.pop(_k, None)
         st.toast("Reset completato")
         st.rerun()
@@ -1493,45 +1548,49 @@ elif nav == "📈 Frontiera Efficiente":
                 hovertemplate="Vol: %{x:.1f}%  Rend: %{y:.1f}%<extra></extra>",
             ))
 
-        # ── 3. Frontiera superiore (Tratto efficiente) — linea spessa blu ─
-        if not frontier.empty:
-            _fr = frontier.sort_values("vol")
-            fig_fe.add_trace(go.Scatter(
-                x=(_fr["vol"]*100).round(2),
-                y=(_fr["ret"]*100).round(2),
-                mode="lines",
-                line=dict(color=NAVY, width=3.5),
-                name="Tratto efficiente",
-                hovertemplate="Frontiera | Vol: <b>%{x:.1f}%</b>  Rend: <b>%{y:.1f}%</b><extra></extra>",
-            ))
-
-        # ── 4. Tratto inefficiente (riflessione sotto Min Varianza) ──────
-        # Costruisce la parte inferiore della parabola dal Monte Carlo:
-        # per ogni bucket di volatilità prende il rendimento MINIMO
-        if not mc.empty and mv_data and "vol" not in (mv_data.get("error",""),):
-            _mv_vol = mv_data.get("vol", 0) * 100
-            _mc_above_mv = mc[mc["vol"]*100 >= _mv_vol - 0.5].copy()
-            if len(_mc_above_mv) > 10:
-                _mc_above_mv["vol_pct"] = (_mc_above_mv["vol"]*100).round(1)
-                _lower = (_mc_above_mv.groupby("vol_pct")["ret"]
-                          .min().reset_index())
-                _lower = _lower.sort_values("vol_pct")
-                # Filtra solo punti sotto la frontiera efficiente
-                if not frontier.empty:
-                    _fr_min_ret = float(frontier["ret"].min()) * 100
-                    _lower = _lower[_lower["ret"]*100 <= _fr_min_ret + 2]
-                if len(_lower) >= 3:
-                    fig_fe.add_trace(go.Scatter(
-                        x=_lower["vol_pct"],
-                        y=(_lower["ret"]*100).round(2),
-                        mode="lines",
-                        line=dict(color="#94A3B8", width=2.5, dash="dot"),
-                        name="Tratto inefficiente",
-                        hovertemplate="Inefficiente | Vol: %{x:.1f}%  Rend: %{y:.1f}%<extra></extra>",
-                    ))
-
-        # ── 5. Punto Min Varianza con linea tratteggiata orizzontale ─────
+        # ── 3+4. Frontiera: tratto efficiente (blu) + inefficiente (grigio tratteggiato) ─
+        # La frontiera viene DIVISA al punto Min Varianza:
+        # - sopra (ret >= mv_ret) → efficiente, linea blu spessa
+        # - sotto (ret < mv_ret)  → inefficiente, linea grigia tratteggiata
         _annotations = []
+        _fr_ineff_point = None   # punto medio tratto inefficiente per annotation
+        if not frontier.empty:
+            _fr_all = frontier.sort_values("ret")
+            _mv_ret_val = mv_data.get("ret", 0) if (mv_data and "error" not in mv_data) else 0
+
+            _fr_eff   = _fr_all[_fr_all["ret"] >= _mv_ret_val]
+            _fr_ineff = _fr_all[_fr_all["ret"] <  _mv_ret_val]
+
+            # Tratto efficiente — blu pieno
+            if not _fr_eff.empty:
+                fig_fe.add_trace(go.Scatter(
+                    x=(_fr_eff["vol"]*100).round(2),
+                    y=(_fr_eff["ret"]*100).round(2),
+                    mode="lines",
+                    line=dict(color=NAVY, width=4),
+                    name="Tratto efficiente",
+                    hovertemplate="✅ Efficiente | Vol: <b>%{x:.1f}%</b>  Rend: <b>%{y:.1f}%</b><extra></extra>",
+                ))
+                # Punto 75° percentile per annotation (in zona alta della linea)
+                _fr_q75 = _fr_eff.iloc[int(len(_fr_eff) * 0.75)]
+                _eff_ann_v = round(float(_fr_q75["vol"]) * 100, 2)
+                _eff_ann_r = round(float(_fr_q75["ret"]) * 100, 2)
+
+            # Tratto inefficiente — grigio tratteggiato
+            if not _fr_ineff.empty:
+                fig_fe.add_trace(go.Scatter(
+                    x=(_fr_ineff["vol"]*100).round(2),
+                    y=(_fr_ineff["ret"]*100).round(2),
+                    mode="lines",
+                    line=dict(color="#94A3B8", width=3, dash="dash"),
+                    name="Tratto inefficiente",
+                    hovertemplate="⚠️ Inefficiente | Vol: %{x:.1f}%  Rend: %{y:.1f}%<extra></extra>",
+                ))
+                _fr_ineff_mid = _fr_ineff.iloc[len(_fr_ineff)//2]
+                _fr_ineff_point = (round(float(_fr_ineff_mid["vol"])*100,2),
+                                   round(float(_fr_ineff_mid["ret"])*100,2))
+
+        # ── 5. Punto Min Varianza ─────────────────────────────────────────
         if mv_data and "error" not in mv_data and mv_data.get("vol"):
             _mv_v = round(mv_data["vol"]*100, 2)
             _mv_r = round(mv_data["ret"]*100, 2)
@@ -1557,52 +1616,39 @@ elif nav == "📈 Frontiera Efficiente":
                 ),
             ))
 
-            if not frontier.empty:
-                _fr_sorted   = frontier.sort_values("ret")
-                _fr_max_r    = float(_fr_sorted["ret"].max()) * 100
-                _fr_max_v    = float(_fr_sorted.loc[_fr_sorted["ret"].idxmax(), "vol"]) * 100
-                # Punto nel 75° percentile della frontiera = zona efficiente alta
-                _fr_q75      = _fr_sorted.iloc[int(len(_fr_sorted)*0.75)]
-                _eff_v       = round(float(_fr_q75["vol"]) * 100, 2)
-                _eff_r       = round(float(_fr_q75["ret"]) * 100, 2)
-
-                # Freccia "Tratto EFFICIENTE" → punta su frontiera in zona alta
+            # ── Annotazioni: testo a DESTRA con freccia lunga verso la curva ─
+            if not frontier.empty and _fr_eff is not None and not _fr_eff.empty:
+                # "Tratto EFFICIENTE" → testo sulla destra del grafico, freccia punta alla linea
                 _annotations.append(dict(
-                    x=_eff_v, y=_eff_r,
-                    ax=-80, ay=30,
+                    x=_eff_ann_v, y=_eff_ann_r,        # punta freccia = punto sulla frontiera
+                    ax=180, ay=-10,                      # testo 180px a destra
                     xref="x", yref="y", axref="pixel", ayref="pixel",
                     text="<b style='color:#1A2C54'>▲ Tratto EFFICIENTE</b><br>"
-                         "<span style='font-size:10px;color:#444'>"
-                         "Massimo rendimento per ogni livello di rischio.<br>"
-                         "Zona dove punta l'ottimizzatore.</span>",
+                         "<span style='font-size:9px;color:#444'>"
+                         "Massimo rendimento per ogni dato rischio</span>",
                     showarrow=True,
                     arrowhead=2, arrowwidth=1.5, arrowcolor=NAVY,
-                    font=dict(size=10), bgcolor="rgba(255,255,255,0.92)",
+                    font=dict(size=10), bgcolor="rgba(240,245,255,0.95)",
                     bordercolor=NAVY, borderwidth=1.5, borderpad=5,
                     align="left",
                 ))
 
-                # Punto nel 25° percentile sotto Min Var = zona inefficiente
-                if not mc.empty:
-                    _mc_low = mc[mc["ret"]*100 < _mv_r].copy()
-                    if len(_mc_low) > 5:
-                        _mc_low_med = _mc_low.nsmallest(max(3, len(_mc_low)//4), "ret")
-                        _ineff_v = round(float(_mc_low_med["vol"].median()) * 100, 2)
-                        _ineff_r = round(float(_mc_low_med["ret"].median()) * 100, 2)
-                        _annotations.append(dict(
-                            x=_ineff_v, y=_ineff_r,
-                            ax=60, ay=40,
-                            xref="x", yref="y", axref="pixel", ayref="pixel",
-                            text="<i style='color:#64748B'>▼ Tratto INEFFICIENTE</i><br>"
-                                 "<span style='font-size:9px;color:#888'>"
-                                 "Stesso rischio, rendimento inferiore al tratto<br>"
-                                 "efficiente. Nessun investitore razionale lo sceglie.</span>",
-                            showarrow=True,
-                            arrowhead=2, arrowwidth=1, arrowcolor="#94A3B8",
-                            font=dict(size=9), bgcolor="rgba(255,255,255,0.85)",
-                            bordercolor="#94A3B8", borderwidth=1, borderpad=4,
-                            align="left",
-                        ))
+            # "Tratto INEFFICIENTE" → testo sulla destra, freccia punta al tratto grigio
+            if _fr_ineff_point:
+                _annotations.append(dict(
+                    x=_fr_ineff_point[0], y=_fr_ineff_point[1],
+                    ax=180, ay=20,
+                    xref="x", yref="y", axref="pixel", ayref="pixel",
+                    text="<i style='color:#64748B'>▼ Tratto INEFFICIENTE</i><br>"
+                         "<span style='font-size:9px;color:#888'>"
+                         "Stesso rischio, rendimento più basso<br>"
+                         "→ nessun investitore razionale lo sceglie</span>",
+                    showarrow=True,
+                    arrowhead=2, arrowwidth=1.2, arrowcolor="#94A3B8",
+                    font=dict(size=9), bgcolor="rgba(248,248,252,0.95)",
+                    bordercolor="#94A3B8", borderwidth=1, borderpad=4,
+                    align="left",
+                ))
 
         # ── 6. Max Sharpe ─────────────────────────────────────────────────
         if ms and "error" not in ms and ms.get("vol"):
