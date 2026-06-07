@@ -1891,16 +1891,42 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                 st.info(f"Portafoglio {label} non disponibile.")
                 return
             w = {k: v for k, v in pdata["weights"].items() if v > 0.001}
-            # Arricchisci con nomi
+
+            # Helper: cerca info fondo in pool → df_unified → df_azimut (fallback)
+            def _get_info(isin):
+                info = dict(_all_fund_pool.get(isin, {}))
+                nome = info.get("nome", "")
+                # Fallback su df_unified se nome mancante o uguale all'ISIN
+                if (not nome or nome == isin) and not df_unified.empty and "isin" in df_unified.columns:
+                    _row = df_unified[df_unified["isin"] == isin]
+                    if not _row.empty:
+                        r = _row.iloc[0]
+                        info.update({k: r[k] for k in r.index if pd.notna(r[k])})
+                # Fallback su df_azimut
+                nome = info.get("nome", "")
+                if (not nome or nome == isin) and not df_azimut.empty:
+                    from utils.data_loader import AZIMUT_COLS as _AC
+                    _c_isin2 = _AC.get("isin","ISIN")
+                    _c_nome2 = _AC.get("nome","FONDO AZIMUT")
+                    if _c_isin2 in df_azimut.columns:
+                        _az_row = df_azimut[df_azimut[_c_isin2].astype(str).str.strip() == isin]
+                        if not _az_row.empty:
+                            info["nome"] = str(_az_row.iloc[0].get(_c_nome2, isin))
+                            info["classificazione"] = str(_az_row.iloc[0].get(_AC.get("classificazione",""), ""))
+                return info
+
             w_rows = []
             for isin, peso in sorted(w.items(), key=lambda x: -x[1]):
-                info = _all_fund_pool.get(isin, {})
+                info = _get_info(isin)
+                nome = str(info.get("nome", isin) or isin)
+                if nome == isin:
+                    nome = isin  # mostra ISIN solo se proprio non trovato
                 w_rows.append({
                     "ISIN": isin,
-                    "Nome": str(info.get("nome", isin))[:55],
+                    "Nome": nome[:55],
                     "Classificazione": str(info.get("classificazione", info.get("categoria", ""))),
                     "Peso %": round(peso * 100, 2),
-                    "Perf 3Y %": info.get("perf_3y"),
+                    "Perf 3Y % ann.": info.get("perf_3y"),
                     "Volatilità %": info.get("volatilita"),
                 })
             w_df = pd.DataFrame(w_rows)
@@ -1911,7 +1937,9 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                              column_config={
                                  "Peso %": st.column_config.ProgressColumn(
                                      "Peso %", min_value=0, max_value=100, format="%.1f%%"),
-                                 "Perf 3Y %": st.column_config.NumberColumn(format="%.2f"),
+                                 "Perf 3Y % ann.": st.column_config.NumberColumn(
+                                     "Perf 3Y % ann.", format="%.1f",
+                                     help="Rendimento annualizzato a 3 anni (fonte: Excel)"),
                                  "Volatilità %": st.column_config.NumberColumn(format="%.2f"),
                              })
             with c2:
