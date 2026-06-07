@@ -1014,36 +1014,194 @@ elif nav == "📈 Frontiera Efficiente":
         _reset_btn = _btn2.form_submit_button("Reset", use_container_width=True)
 
     # Selezione manuale avanzata
-    with st.expander("Selezione manuale avanzata", expanded=False):
-        st.caption("Aggiungi o rimuovi strumenti specifici dalla selezione.")
-        _adv_raw = st.text_area("ISIN o Ticker aggiuntivi (uno per riga)", height=80,
-                                 placeholder="ENI.MI\nAAPL\nIE00B4L5Y983",
-                                 key="fe_adv_raw")
-        _adv_remove = st.multiselect(
-            "Rimuovi dalla selezione corrente",
-            options=st.session_state.get("fe_selected_isins", []),
-            format_func=lambda x: f"{x} — {str(_all_fund_pool.get(x,{}).get('nome',x))[:45]}",
-            key="fe_adv_remove",
-        )
-        _adv_c1, _adv_c2 = st.columns(2)
-        if _adv_c1.button("Aggiungi", key="adv_add"):
-            from utils.nav_fetcher import classify_asset_type
-            for _line in (_adv_raw or "").strip().split("\n"):
-                _tok = _line.strip().upper()
-                if _tok:
-                    _cur = st.session_state.get("fe_selected_isins", [])
-                    if _tok not in _cur:
-                        _cur.append(_tok)
-                        st.session_state["fe_selected_isins"] = _cur
-                    _pool_add(_tok, {"isin": _tok, "nome": _tok,
-                                     "classificazione": classify_asset_type(_tok)})
-            st.rerun()
-        if _adv_c2.button("Rimuovi selezionati", key="adv_rem") and _adv_remove:
-            st.session_state["fe_selected_isins"] = [
-                i for i in st.session_state.get("fe_selected_isins", [])
-                if i not in _adv_remove
-            ]
-            st.rerun()
+    with st.expander("🔍 Selezione manuale avanzata", expanded=False):
+        st.caption("Sfoglia le liste fondi e aggiungi direttamente alla selezione corrente.")
+
+        _adv_tab1, _adv_tab2, _adv_tab3, _adv_tab4 = st.tabs([
+            "📋 Lista Generalisti", "🎯 Lista Tematici", "🔵 Fondi Azimut", "✏️ ISIN manuale"
+        ])
+
+        def _adv_add_isins(isins_to_add: list):
+            """Aggiunge ISIN alla selezione corrente e al pool."""
+            _cur = list(st.session_state.get("fe_selected_isins", []))
+            _added_n = 0
+            for _isin_a in isins_to_add:
+                if _isin_a and _isin_a not in _cur:
+                    _cur.append(_isin_a)
+                    _added_n += 1
+            st.session_state["fe_selected_isins"] = _cur
+            return _added_n
+
+        # ── Tab 1: Lista Generalisti ──────────────────────────────────────
+        with _adv_tab1:
+            st.caption("Top 100 fondi generalisti/globali per Score Qualità.")
+            try:
+                from utils.constraints import build_lista_generalisti
+                _gen_df = build_lista_generalisti(df_unified, n=100) if not df_unified.empty else pd.DataFrame()
+                if not _gen_df.empty:
+                    _gen_opts = []
+                    for _, _r in _gen_df.iterrows():
+                        _isin_g = str(_r.get("isin",""))
+                        _nome_g = str(_r.get("nome",""))[:50]
+                        _cl_g   = str(_r.get("classificazione",""))[:30]
+                        _sc_g   = float(_r.get("score_qualita",0) or 0)
+                        _p3_g   = _r.get("perf_3y")
+                        _p3_str = f" | 3Y:{_p3_g:.1f}%" if _p3_g is not None else ""
+                        _gen_opts.append((_isin_g, f"{_nome_g}  [{_cl_g}  score:{_sc_g:.1f}{_p3_str}]"))
+                    _gen_sel = st.multiselect(
+                        "Seleziona fondi generalisti da aggiungere",
+                        options=[o[0] for o in _gen_opts],
+                        format_func=lambda x: next((o[1] for o in _gen_opts if o[0]==x), x),
+                        key="adv_gen_sel",
+                    )
+                    if st.button("➕ Aggiungi generalisti selezionati", key="adv_gen_add"):
+                        for _ig in _gen_sel:
+                            _rw = _gen_df[_gen_df["isin"]==_ig]
+                            if not _rw.empty:
+                                _pool_add(_ig, _rw.iloc[0].to_dict())
+                        n = _adv_add_isins(_gen_sel)
+                        st.toast(f"✅ {n} fondi aggiunti")
+                        st.rerun()
+                else:
+                    st.info("Lista generalisti non disponibile (carica i file fondi).")
+            except Exception as _e:
+                st.warning(f"Lista generalisti: {_e}")
+
+        # ── Tab 2: Lista Tematici ─────────────────────────────────────────
+        with _adv_tab2:
+            st.caption("Top 100 fondi tematici/specializzati per Score Qualità.")
+            try:
+                from utils.constraints import build_lista_tematici
+                _tem_df = build_lista_tematici(df_unified, n=100) if not df_unified.empty else pd.DataFrame()
+                if not _tem_df.empty:
+                    _tem_opts = []
+                    for _, _r in _tem_df.iterrows():
+                        _isin_t = str(_r.get("isin",""))
+                        _nome_t = str(_r.get("nome",""))[:50]
+                        _cl_t   = str(_r.get("classificazione",""))[:30]
+                        _sc_t   = float(_r.get("score_qualita",0) or 0)
+                        _p3_t   = _r.get("perf_3y")
+                        _p3_str2 = f" | 3Y:{_p3_t:.1f}%" if _p3_t is not None else ""
+                        _tem_opts.append((_isin_t, f"{_nome_t}  [{_cl_t}  score:{_sc_t:.1f}{_p3_str2}]"))
+                    _tem_sel = st.multiselect(
+                        "Seleziona fondi tematici da aggiungere",
+                        options=[o[0] for o in _tem_opts],
+                        format_func=lambda x: next((o[1] for o in _tem_opts if o[0]==x), x),
+                        key="adv_tem_sel",
+                    )
+                    if st.button("➕ Aggiungi tematici selezionati", key="adv_tem_add"):
+                        for _it in _tem_sel:
+                            _rw = _tem_df[_tem_df["isin"]==_it]
+                            if not _rw.empty:
+                                _pool_add(_it, _rw.iloc[0].to_dict())
+                        n = _adv_add_isins(_tem_sel)
+                        st.toast(f"✅ {n} fondi aggiunti")
+                        st.rerun()
+                else:
+                    st.info("Lista tematici non disponibile (carica i file fondi).")
+            except Exception as _e:
+                st.warning(f"Lista tematici: {_e}")
+
+        # ── Tab 3: Fondi Azimut (top 50 per Score Qualità) ───────────────
+        with _adv_tab3:
+            st.caption(
+                "Top 50 fondi Azimut per Score Qualità "
+                "(colonna AUM non disponibile nel file — usato Score come proxy)."
+            )
+            try:
+                if not df_azimut.empty:
+                    from utils.data_loader import AZIMUT_COLS as _ACOLS2
+                    from utils.scoring import compute_score as _cs2
+                    _c_isin3 = _ACOLS2.get("isin","ISIN")
+                    _c_nome3 = _ACOLS2.get("nome","FONDO AZIMUT")
+                    _c_cl3   = _ACOLS2.get("classificazione","CLASSIFICAZIONE FIDA")
+                    _c_p3b   = _ACOLS2.get("perf_3y","PERF 3Y")
+                    _c_p1b   = _ACOLS2.get("perf_1y","PERF 1Y")
+                    _c_fb    = _ACOLS2.get("stelle_fida","STELLE FIDA")
+
+                    import re as _re3
+                    _AZ_STOP3 = {"a","b","c","d","e","f","p","r","i","ii","iii",
+                                 "acc","eur","usd","inc","cap","ret","class","cl","az"}
+                    def _az_key3(n):
+                        w = _re3.sub(r"[^a-z0-9\s]"," ",str(n).lower()).split()
+                        return " ".join([x for x in w if x not in _AZ_STOP3 and len(x)>1][:4])
+
+                    _az_top_rows, _seen3 = [], {}
+                    for _, _r in df_azimut.iterrows():
+                        _isin3 = str(_r.get(_c_isin3,"") or "").strip()
+                        if not _isin3 or len(_isin3)<8: continue
+                        _nome3 = str(_r.get(_c_nome3,_isin3) or _isin3)
+                        _k3 = _az_key3(_nome3)
+                        try:
+                            _p3v = float(_r.get(_c_p3b,0) or 0)
+                            _p1v = float(_r.get(_c_p1b,0) or 0)
+                            _sc3 = _cs2(_p3v, _p1v, volatility=0.0, fida_stars=_r.get(_c_fb))
+                        except Exception:
+                            _sc3 = 0.0
+                        _cl3v = str(_r.get(_c_cl3,"") or "")
+                        _entry3 = {"isin":_isin3,"nome":_nome3,"classificazione":_cl3v,
+                                   "perf_3y":float(_r.get(_c_p3b,0) or 0),
+                                   "perf_1y":float(_r.get(_c_p1b,0) or 0),
+                                   "score_qualita":_sc3,"_source":"azimut","casa":"Azimut"}
+                        if _k3 not in _seen3 or _sc3 > _seen3[_k3]["score_qualita"]:
+                            _seen3[_k3] = _entry3
+                    _az_top50 = sorted(_seen3.values(), key=lambda x: x["score_qualita"], reverse=True)[:50]
+
+                    _az_opts = []
+                    for _e in _az_top50:
+                        _p3s = f" | 3Y:{_e['perf_3y']:.1f}%" if _e.get("perf_3y") else ""
+                        _az_opts.append((_e["isin"],
+                            f"{_e['nome'][:45]}  [{_e['classificazione'][:28]}  score:{_e['score_qualita']:.1f}{_p3s}]"))
+
+                    _az_sel2 = st.multiselect(
+                        "Seleziona fondi Azimut da aggiungere",
+                        options=[o[0] for o in _az_opts],
+                        format_func=lambda x: next((o[1] for o in _az_opts if o[0]==x), x),
+                        key="adv_az_sel",
+                    )
+                    if st.button("➕ Aggiungi Azimut selezionati", key="adv_az_add"):
+                        for _ia in _az_sel2:
+                            _ea = next((e for e in _az_top50 if e["isin"]==_ia), None)
+                            if _ea:
+                                _pool_add(_ia, _ea)
+                        n = _adv_add_isins(_az_sel2)
+                        st.toast(f"✅ {n} fondi Azimut aggiunti")
+                        st.rerun()
+                else:
+                    st.info("Catalogo Azimut non caricato. Carica il file nella sidebar.")
+            except Exception as _e:
+                st.warning(f"Lista Azimut: {_e}")
+
+        # ── Tab 4: ISIN manuale + rimozione ──────────────────────────────
+        with _adv_tab4:
+            _adv_raw = st.text_area("ISIN o Ticker aggiuntivi (uno per riga)", height=80,
+                                     placeholder="ENI.MI\nAAPL\nIE00B4L5Y983",
+                                     key="fe_adv_raw")
+            _adv_remove = st.multiselect(
+                "Rimuovi dalla selezione corrente",
+                options=st.session_state.get("fe_selected_isins", []),
+                format_func=lambda x: f"{x} — {str(_all_fund_pool.get(x,{}).get('nome',x))[:45]}",
+                key="fe_adv_remove",
+            )
+            _adv_c1, _adv_c2 = st.columns(2)
+            if _adv_c1.button("Aggiungi ISIN", key="adv_add"):
+                from utils.nav_fetcher import classify_asset_type
+                for _line in (_adv_raw or "").strip().split("\n"):
+                    _tok = _line.strip().upper()
+                    if _tok:
+                        _cur = st.session_state.get("fe_selected_isins", [])
+                        if _tok not in _cur:
+                            _cur.append(_tok)
+                            st.session_state["fe_selected_isins"] = _cur
+                        _pool_add(_tok, {"isin": _tok, "nome": _tok,
+                                         "classificazione": classify_asset_type(_tok)})
+                st.rerun()
+            if _adv_c2.button("Rimuovi selezionati", key="adv_rem") and _adv_remove:
+                st.session_state["fe_selected_isins"] = [
+                    i for i in st.session_state.get("fe_selected_isins", [])
+                    if i not in _adv_remove
+                ]
+                st.rerun()
 
     # ── View Black-Litterman manuali ─────────────────────────────────────
     with st.expander("🔮 View Black-Litterman (opzionale)", expanded=False):
