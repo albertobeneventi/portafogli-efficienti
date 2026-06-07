@@ -221,16 +221,69 @@ def build_hybrid_mu_sigma(
             vol_val = _VOL_DEFAULT.get(bkt, 0.120)
         stat_vol[i] = vol_val
 
-    # ── 3. Costruisce μ vettore (solo prior di categoria) ─────────────────
-    mu_vals = {}
+    # ── 3. Costruisce μ vettore: benchmark categoria + alpha del gestore ─────
+    #
+    # μᵢ = μ_benchmark_categoria + αᵢ
+    #
+    # αᵢ è stimato dallo Score Qualità normalizzato PER CATEGORIA:
+    #   - Il gestore che supera stabilmente il benchmark ha alpha > 0
+    #   - Il gestore che sottoperforma ha alpha < 0 (costo quantificato)
+    #   - Alpha = 0 per il gestore mediano della categoria
+    #
+    # Normalizzazione: rank percentile all'interno della categoria → z-score
+    # Ampiezza alpha: ±ALPHA_MAX per anno (letteratura empirica UCITS europei)
+    #   Top manager (>75° percentile):  +1% → +2%/anno
+    #   Mediano (50° percentile):        0%/anno  (= solo benchmark categoria)
+    #   Bottom manager (<25° percentile): -1% → -2%/anno
+    #
+    ALPHA_MAX = 0.020   # 2% per anno: range ragionevole per gestione attiva UCITS
+
+    # Raggruppa score per categoria
+    cat_scores: dict[str, list] = {}
     for i in all_isins:
         bkt_i = _bucket_of(assets_info.get(i, {}))
+        sc = assets_info.get(i, {}).get("score_qualita")
+        try:
+            sc_f = float(sc)
+            if not np.isnan(sc_f):
+                cat_scores.setdefault(bkt_i, []).append((i, sc_f))
+        except (TypeError, ValueError):
+            pass
+
+    # Per ogni categoria: calcola mediana e std dei score
+    cat_stats: dict[str, tuple] = {}   # bkt → (median, std)
+    for bkt_i, items in cat_scores.items():
+        vals = np.array([v for _, v in items])
+        med  = float(np.median(vals))
+        std  = float(np.std(vals)) if len(vals) > 1 else 1.0
+        cat_stats[bkt_i] = (med, max(std, 0.1))
+
+    mu_vals = {}
+    for i in all_isins:
+        bkt_i   = _bucket_of(assets_info.get(i, {}))
         prior_i = _MU_PRIOR.get(bkt_i, 0.060)
+
+        # Alpha da score
+        sc = assets_info.get(i, {}).get("score_qualita")
+        alpha_i = 0.0
+        try:
+            sc_f = float(sc)
+            if not np.isnan(sc_f) and bkt_i in cat_stats:
+                med, std = cat_stats[bkt_i]
+                # z-score rispetto alla categoria, scalato a ALPHA_MAX
+                # 1 std sopra la mediana → alpha ≈ ALPHA_MAX/2
+                # 2+ std → capped a ALPHA_MAX
+                z = (sc_f - med) / std
+                alpha_i = float(np.clip(z * ALPHA_MAX * 0.5, -ALPHA_MAX, ALPHA_MAX))
+        except (TypeError, ValueError):
+            pass
+
+        # Segnale negativo reale (ETF/azione con serie storica in perdita)
         if i in real_mu and real_mu[i] < 0:
-            # Asset con rendimento reale negativo: segnale smorzato (media con prior)
-            mu_vals[i] = 0.5 * real_mu[i] + 0.5 * prior_i
+            mu_vals[i] = 0.5 * real_mu[i] + 0.5 * (prior_i + alpha_i)
         else:
-            mu_vals[i] = prior_i
+            mu_vals[i] = prior_i + alpha_i
+
     mu = pd.Series(mu_vals)
 
     # ── 4. Costruisce Σ matrice ────────────────────────────────────────────

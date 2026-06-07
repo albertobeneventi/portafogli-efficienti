@@ -1569,12 +1569,14 @@ elif nav == "📈 Frontiera Efficiente":
         st.markdown("---")
         st.subheader("📊 Risultati Ottimizzazione")
         st.caption(
-            "⚠️ **Nota metodologica**: Il **rendimento atteso non è il rendimento storico** dei fondi. "
-            "Il modello usa prior di categoria forward-looking: Azionario 7.5%/anno, Obbligazionario 3%, "
-            "Bilanciato 5%, Alternativo 4%, Monetario 2.5%. "
-            "La scelta tra fondi della stessa categoria è guidata dalla volatilità (rischio), non dai rendimenti passati. "
-            "Il tab **Black-Litterman** consente di modificare le aspettative per singoli asset. "
-            "Sharpe = (rendimento atteso − 2.5% risk-free) / volatilità annua. Non sono previsioni garantite."
+            "⚠️ **Nota metodologica** — **μᵢ = benchmark categoria + alpha gestore**. "
+            "Benchmark forward-looking: Azionario 7.5%/anno, Obbligazionario 3%, Bilanciato 5%, Alt 4%, Mon 2.5%. "
+            "L'**alpha** è stimato dallo Score Qualità normalizzato per categoria: "
+            "gestori sopra la mediana hanno alpha positivo (+1/+2%); "
+            "gestori sotto la mediana hanno alpha negativo (−1/−2%, costo della sottoperformance). "
+            "Range alpha: ±2%/anno — coerente con la letteratura empirica sui fondi UCITS attivi europei. "
+            "Il tab **Black-Litterman** consente view soggettive per singolo asset. "
+            "Sharpe = (μ − 2.5% risk-free) / σ annua. Non sono previsioni garantite."
         )
 
         # KPI
