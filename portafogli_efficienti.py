@@ -1840,7 +1840,7 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
         st.subheader("📋 Composizione portafogli")
         tab_ms2, tab_mv2, tab_bl2 = st.tabs(["⭐ Max Sharpe", "🛡️ Min Varianza", "🔮 Black-Litterman"])
 
-        def _render_weights(pdata: dict, label: str):
+        def _render_weights(pdata: dict, label: str, chart_key: str = ""):
             if not pdata or "error" in pdata:
                 st.info(f"Portafoglio {label} non disponibile.")
                 return
@@ -1876,7 +1876,7 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                 pie.update_traces(textposition="inside",
                                   textinfo="percent+label",
                                   textfont_size=10)
-                st.plotly_chart(pie, use_container_width=True)
+                st.plotly_chart(pie, use_container_width=True, key=f"pie_{chart_key}")
 
             st.markdown(
                 f"**Rendimento atteso:** {pdata.get('ret',0)*100:.2f}% &nbsp;|&nbsp; "
@@ -1884,9 +1884,9 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                 f"**Sharpe:** {pdata.get('sharpe',0):.3f}"
             )
 
-        with tab_ms2: _render_weights(ms, "Max Sharpe")
-        with tab_mv2: _render_weights(result.get("min_variance",{}), "Min Varianza")
-        with tab_bl2: _render_weights(bl_result or {}, "Black-Litterman")
+        with tab_ms2: _render_weights(ms, "Max Sharpe", "ms")
+        with tab_mv2: _render_weights(result.get("min_variance",{}), "Min Varianza", "mv")
+        with tab_bl2: _render_weights(bl_result or {}, "Black-Litterman", "bl")
 
         # ── Matrice Correlazioni ─────────────────────────────────────────
         if len(price_dict) >= 2:
