@@ -178,11 +178,33 @@ def build_hybrid_mu_sigma(
         else:
             mu_val = 0.05
         # σ: usa volatilita se disponibile, default basato su categoria
+        # Floor realistici per categoria (valori di mercato europeo 2015-2024)
+        _VOL_FLOOR = {
+            "Monetario":      0.003,   #  0.3% — money market
+            "Obbligazionario":0.030,   #  3%   — bond (gov/corp IG)
+            "Bilanciato":     0.065,   #  6.5% — balanced
+            "Alternativo":    0.060,   #  6%   — alternative
+            "Azionario":      0.110,   # 11%   — equity (floor conservativo)
+            "ETF":            0.100,   # 10%
+            "Azione":         0.150,   # 15%   — single stock
+        }
+        bkt = _bucket_of(assets_info.get(i, {}))
+        _floor = _VOL_FLOOR.get(bkt, 0.090)   # 9% default
+
         if vol is not None and not (isinstance(vol, float) and np.isnan(vol)) and float(vol) > 0:
-            vol_val = max(float(vol) / 100.0, 0.005)
+            v_raw = float(vol)
+            # Autoscale: se il valore è < 1.0 probabilmente è in formato decimale
+            # (es. 0.1234 = 12.34%) → moltiplica ×100 prima di dividere per 100
+            # Se è > 1.0 è già in percentuale (es. 12.34 → /100 → 0.1234)
+            if v_raw < 1.0:
+                v_raw = v_raw * 100.0   # da decimale a percentuale
+            vol_val = v_raw / 100.0     # da percentuale a decimale
+            # Applica floor categoriale (evita volatilità irrealisticamente basse
+            # dovute a dati Excel errati o fondi a brevissimo storico)
+            vol_val = max(vol_val, _floor)
         else:
-            bkt = _bucket_of(assets_info.get(i, {}))
-            vol_val = {"Monetario": 0.003, "Obbligazionario": 0.045,
+            # Nessun dato di volatilità: usa default categoriale
+            vol_val = {"Monetario": 0.004, "Obbligazionario": 0.045,
                        "Bilanciato": 0.080, "Alternativo": 0.070,
                        "Azionario": 0.150, "ETF": 0.130, "Azione": 0.220}.get(bkt, 0.120)
         stat_mu[i] = mu_val
