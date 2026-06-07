@@ -339,7 +339,20 @@ def load_fondi_azimut(path=None) -> pd.DataFrame:
     is_filelike = hasattr(path, "read") or isinstance(path, (bytes, io.BytesIO))
     if not is_filelike and not os.path.exists(path):
         return _demo_fondi_azimut()
-    df = pd.read_excel(path, dtype=object)
+    # Auto-rileva la riga header: cerca la riga che contiene "ISIN" o "FONDO"
+    # (il file può avere una riga di data/titolo sopra la vera intestazione)
+    _header_row = 0
+    try:
+        _df_peek = pd.read_excel(path, header=None, nrows=10, dtype=object)
+        for _i, _row in _df_peek.iterrows():
+            _vals = [str(v).strip().upper() for v in _row if pd.notna(v) and str(v).strip()]
+            if any("ISIN" in v for v in _vals) or any("FONDO" in v for v in _vals):
+                _header_row = int(_i)
+                break
+    except Exception:
+        _header_row = 0
+
+    df = pd.read_excel(path, header=_header_row, dtype=object)
     df.columns = [str(c).strip() for c in df.columns]
     df = _sanitize_df(df)
 
