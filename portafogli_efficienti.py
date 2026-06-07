@@ -1338,8 +1338,8 @@ elif nav == "📈 Frontiera Efficiente":
                         if sc_mapper:
                             sector_constraints = {
                                 "mapper": sc_mapper,
-                                "lower": {k: max(0, v - 0.05) for k, v in ac_target.items()},
-                                "upper": {k: min(1, v + 0.05) for k, v in ac_target.items()},
+                                "lower": {k: max(0, v - 0.10) for k, v in ac_target.items()},
+                                "upper": {k: min(1, v + 0.10) for k, v in ac_target.items()},
                             }
 
                     result = compute_efficient_frontier(
