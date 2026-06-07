@@ -1569,24 +1569,20 @@ elif nav == "📈 Frontiera Efficiente":
         st.markdown("---")
         st.subheader("📊 Risultati Ottimizzazione")
         st.caption(
-            "⚠️ **Nota metodologica**: Il rendimento atteso **non è il rendimento storico**. "
-            "Il modello applica uno *shrinkage* (Stein): μ = 30% × storico annualizzato + 70% × prior di equilibrio per categoria "
-            "(Azionario 7.5%, Obbligazionario 3%, Bilanciato 5%). "
-            "Questo riduce il bias da selezione a posteriori: l'ottimizzatore non sceglie solo i fondi "
-            "con il miglior passato ma bilancia storia e aspettative forward-looking. "
-            "Volatilità = stima annualizzata da Excel con floor categoriali minimi. "
-            "Sharpe = (rendimento annuo − 2.5% risk-free) / volatilità annua. Non sono previsioni garantite."
+            "⚠️ **Nota metodologica**: Il **rendimento atteso non è il rendimento storico** dei fondi. "
+            "Il modello usa prior di categoria forward-looking: Azionario 7.5%/anno, Obbligazionario 3%, "
+            "Bilanciato 5%, Alternativo 4%, Monetario 2.5%. "
+            "La scelta tra fondi della stessa categoria è guidata dalla volatilità (rischio), non dai rendimenti passati. "
+            "Il tab **Black-Litterman** consente di modificare le aspettative per singoli asset. "
+            "Sharpe = (rendimento atteso − 2.5% risk-free) / volatilità annua. Non sono previsioni garantite."
         )
 
         # KPI
         m_col = st.columns(4)
         ms = result.get("max_sharpe", {})
         if ms and "error" not in ms:
-            _ret_ann = ms['ret']                                     # annualizzato (es. 0.357)
-            _ret_3y  = ((1 + _ret_ann) ** 3 - 1) * 100              # cumulativo 3Y (es. 151%)
-            m_col[0].metric("📈 Rendimento annualizzato atteso",
-                            f"{_ret_ann*100:.2f}%",
-                            delta=f"≈ {_ret_3y:.1f}% cumulativo 3Y")
+            _ret_ann = ms['ret']
+            m_col[0].metric("📈 Rendimento atteso (annuo)", f"{_ret_ann*100:.2f}%")
             m_col[1].metric("📉 Volatilità annua stimata", f"{ms['vol']*100:.2f}%")
             m_col[2].metric("⚡ Sharpe Ratio", f"{ms['sharpe']:.3f}")
             if price_dict:
@@ -2034,36 +2030,30 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                 # Tabella di confronto (se punto manuale disponibile)
                 if _manual_point:
                     st.subheader("📊 Confronto: Il tuo portafoglio vs Ottimizzati")
-                    def _fmt_ret(ret_ann):
-                        """Formatta rendimento annualizzato + cumulativo 3Y."""
-                        r3y = ((1 + ret_ann)**3 - 1)*100
-                        return f"{ret_ann*100:.2f}% ann. (≈{r3y:.1f}% 3Y)"
                     _ms_cmp = {
-                        "Rendimento": _fmt_ret(ms['ret']) if ms and 'ret' in ms else "-",
+                        "Rendimento": f"{ms['ret']*100:.2f}%" if ms and 'ret' in ms else "-",
                         "Volatilità": f"{ms['vol']*100:.2f}%" if ms and 'vol' in ms else "-",
                         "Sharpe": f"{ms.get('sharpe',0):.3f}" if ms else "-",
                     }
                     _mv_cmp_d = result.get("min_variance", {})
                     _mv_cmp = {
-                        "Rendimento": _fmt_ret(_mv_cmp_d['ret']) if _mv_cmp_d and 'ret' in _mv_cmp_d else "-",
+                        "Rendimento": f"{_mv_cmp_d['ret']*100:.2f}%" if _mv_cmp_d and 'ret' in _mv_cmp_d else "-",
                         "Volatilità": f"{_mv_cmp_d['vol']*100:.2f}%" if _mv_cmp_d and 'vol' in _mv_cmp_d else "-",
                         "Sharpe": f"{_mv_cmp_d.get('sharpe',0):.3f}" if _mv_cmp_d else "-",
                     }
-                    _mp_ann = _manual_point['ret'] / 100.0        # manuale è in %
-                    _mp_3y  = ((1 + _mp_ann)**3 - 1)*100
                     _cmp_df = pd.DataFrame({
                         "🟠 Il tuo portafoglio": {
-                            "Rendimento atteso": f"{_manual_point['ret']:.2f}% ann. (≈{_mp_3y:.1f}% 3Y)",
+                            "Rendimento atteso (annuo)": f"{_manual_point['ret']:.2f}%",
                             "Volatilità (rischio)": f"{_manual_point['vol']:.2f}%",
                             "Indice di Sharpe": str(_manual_point["sharpe"]),
                         },
                         "⭐ Max Sharpe (ottimizzato)": {
-                            "Rendimento atteso": _ms_cmp["Rendimento"],
+                            "Rendimento atteso (annuo)": _ms_cmp["Rendimento"],
                             "Volatilità (rischio)": _ms_cmp["Volatilità"],
                             "Indice di Sharpe": _ms_cmp["Sharpe"],
                         },
                         "◆ Min Varianza (ottimizzato)": {
-                            "Rendimento atteso": _mv_cmp["Rendimento"],
+                            "Rendimento atteso (annuo)": _mv_cmp["Rendimento"],
                             "Volatilità (rischio)": _mv_cmp["Volatilità"],
                             "Indice di Sharpe": _mv_cmp["Sharpe"],
                         },
@@ -2157,11 +2147,8 @@ Mostrano lo spazio di tutte le combinazioni possibili degli strumenti selezionat
                                   textfont_size=10)
                 st.plotly_chart(pie, use_container_width=True, key=f"pie_{chart_key}")
 
-            _rw_ann = pdata.get('ret', 0)
-            _rw_3y  = ((1 + _rw_ann) ** 3 - 1) * 100
             st.markdown(
-                f"**Rendimento annualizzato:** {_rw_ann*100:.2f}% "
-                f"*(≈ {_rw_3y:.1f}% cumulativo 3Y)* &nbsp;|&nbsp; "
+                f"**Rendimento atteso (annuo):** {pdata.get('ret',0)*100:.2f}% &nbsp;|&nbsp; "
                 f"**Volatilità annua:** {pdata.get('vol',0)*100:.2f}% &nbsp;|&nbsp; "
                 f"**Sharpe:** {pdata.get('sharpe',0):.3f}"
             )

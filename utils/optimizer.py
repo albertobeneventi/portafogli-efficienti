@@ -154,92 +154,83 @@ def build_hybrid_mu_sigma(
             except Exception:
                 pass
 
-    # ── 2. Asset solo da Excel (fondi UCITS) ─────────────────────────────
-    fund_isins = [i for i in all_isins if i not in real_mu]
+    # ── 2. σ per asset senza serie storica (fondi UCITS da Excel) ────────
+    #
+    # SCELTA METODOLOGICA — rendimenti attesi (μ):
+    # Non usiamo perf_3y o perf_1y come μ. Il motivo è che:
+    # - usare rendimenti storici in un ottimizzatore produce selezione a posteriori
+    #   (l'ottimizzatore sceglie sempre i fondi col miglior passato)
+    # - i rendimenti passati non predicono i rendimenti futuri dei fondi attivi
+    #
+    # μ = prior di categoria (forward-looking, basato su asset class):
+    #   Azionario:       7.5% anno  (equity risk premium ~5% + rfr ~2.5%)
+    #   Obbligazionario: 3.0% anno  (rendimento medio mercato europeo IG)
+    #   Bilanciato:      5.0% anno
+    #   Alternativo:     4.0% anno
+    #   Monetario:       2.5% anno
+    #
+    # Con μ uguale per tutti i fondi della stessa categoria, l'ottimizzatore
+    # minimizza il rischio per il target di rendimento: NON sceglie i fondi
+    # col miglior passato ma costruisce la struttura di portafoglio ottimale.
+    # Le differenze tra fondi vengono catturate dalla σ (volatilità Excel).
+    # Il tab Black-Litterman consente di aggiungere view soggettive.
+    _MU_PRIOR = {
+        "Azionario":      0.075,
+        "Obbligazionario":0.030,
+        "Bilanciato":     0.050,
+        "Alternativo":    0.040,
+        "Monetario":      0.025,
+        "ETF":            0.070,
+        "Azione":         0.080,
+    }
+    # Per ETF/azioni con serie storica reale, usiamo comunque il prior di categoria
+    # (anche yfinance restituisce rendimenti storici, soggetti allo stesso bias)
+    # Eccezione: se real_mu esiste ma è < 0 (asset in perdita strutturale), usiamo
+    # il real_mu come segnale negativo smorzato.
 
-    stat_mu: dict[str, float] = {}
+    fund_isins = [i for i in all_isins if i not in real_mu]
     stat_vol: dict[str, float] = {}
+
+    # σ floor per categoria (dati di mercato europeo 2015-2024)
+    _VOL_FLOOR = {
+        "Monetario":       0.003,
+        "Obbligazionario": 0.030,
+        "Bilanciato":      0.065,
+        "Alternativo":     0.060,
+        "Azionario":       0.110,
+        "ETF":             0.100,
+        "Azione":          0.150,
+    }
+    _VOL_DEFAULT = {
+        "Monetario": 0.004, "Obbligazionario": 0.045, "Bilanciato": 0.080,
+        "Alternativo": 0.070, "Azionario": 0.150, "ETF": 0.130, "Azione": 0.220,
+    }
+
     for i in fund_isins:
         info = assets_info.get(i, {})
-        p3   = info.get("perf_3y")
         vol  = info.get("volatilita")
-        p1   = info.get("perf_1y")
-        # μ annualizzato con SHRINKAGE verso prior di equilibrio per categoria
-        #
-        # Problema: usare perf_3y storica come μ atteso porta a selezionare
-        # i fondi col miglior passato (bias da selezione a posteriori).
-        # Un fondo che ha fatto +180% in 3 anni NON farà +180% nei prossimi 3.
-        #
-        # Soluzione: μ_adj = α × μ_storico + (1-α) × μ_prior_categoria
-        # dove α = 0.30 (peso basso al passato) e μ_prior è il rendimento
-        # "neutro" atteso per la categoria sull'orizzonte forward.
-        #
-        # Prior di equilibrio (stime conservative forward-looking, area Euro):
-        #   Azionario:      7-8% anno (equity risk premium ~5% + risk-free ~2.5%)
-        #   Obbligazionario: 3%  anno (rendimento corrente mercato europeo IG)
-        #   Bilanciato:     5%  anno
-        #   Alternativo:    4%  anno
-        #   Monetario:      2.5% anno
-        _MU_PRIOR = {
-            "Azionario":      0.075,
-            "Obbligazionario":0.030,
-            "Bilanciato":     0.050,
-            "Alternativo":    0.040,
-            "Monetario":      0.025,
-            "ETF":            0.070,
-            "Azione":         0.080,
-        }
-        _SHRINK_ALPHA = 0.30   # 30% peso al passato, 70% al prior
-        bkt_mu = _bucket_of(assets_info.get(i, {}))
-        mu_prior = _MU_PRIOR.get(bkt_mu, 0.060)
-
-        if p3 is not None and not (isinstance(p3, float) and np.isnan(p3)):
-            r3 = float(p3) / 100.0
-            r3 = max(-0.99, min(r3, 9.0))
-            mu_hist = (1.0 + r3) ** (1.0 / 3.0) - 1.0   # annualizzato da cumulativo 3Y
-            mu_val  = _SHRINK_ALPHA * mu_hist + (1.0 - _SHRINK_ALPHA) * mu_prior
-        elif p1 is not None and not (isinstance(p1, float) and np.isnan(p1)):
-            mu_hist = float(p1) / 100.0   # già annualizzato
-            mu_val  = _SHRINK_ALPHA * mu_hist * 0.8 + (1.0 - _SHRINK_ALPHA) * mu_prior
-        else:
-            mu_val = mu_prior
-        # σ: usa volatilita se disponibile, default basato su categoria
-        # Floor realistici per categoria (valori di mercato europeo 2015-2024)
-        _VOL_FLOOR = {
-            "Monetario":      0.003,   #  0.3% — money market
-            "Obbligazionario":0.030,   #  3%   — bond (gov/corp IG)
-            "Bilanciato":     0.065,   #  6.5% — balanced
-            "Alternativo":    0.060,   #  6%   — alternative
-            "Azionario":      0.110,   # 11%   — equity (floor conservativo)
-            "ETF":            0.100,   # 10%
-            "Azione":         0.150,   # 15%   — single stock
-        }
-        bkt = _bucket_of(assets_info.get(i, {}))
-        _floor = _VOL_FLOOR.get(bkt, 0.090)   # 9% default
+        bkt  = _bucket_of(info)
+        _floor = _VOL_FLOOR.get(bkt, 0.090)
 
         if vol is not None and not (isinstance(vol, float) and np.isnan(vol)) and float(vol) > 0:
             v_raw = float(vol)
-            # Autoscale: se il valore è < 1.0 probabilmente è in formato decimale
-            # (es. 0.1234 = 12.34%) → moltiplica ×100 prima di dividere per 100
-            # Se è > 1.0 è già in percentuale (es. 12.34 → /100 → 0.1234)
             if v_raw < 1.0:
-                v_raw = v_raw * 100.0   # da decimale a percentuale
-            vol_val = v_raw / 100.0     # da percentuale a decimale
-            # Applica floor categoriale (evita volatilità irrealisticamente basse
-            # dovute a dati Excel errati o fondi a brevissimo storico)
-            vol_val = max(vol_val, _floor)
+                v_raw *= 100.0          # formato decimale → percentuale
+            vol_val = max(v_raw / 100.0, _floor)
         else:
-            # Nessun dato di volatilità: usa default categoriale
-            vol_val = {"Monetario": 0.004, "Obbligazionario": 0.045,
-                       "Bilanciato": 0.080, "Alternativo": 0.070,
-                       "Azionario": 0.150, "ETF": 0.130, "Azione": 0.220}.get(bkt, 0.120)
-        stat_mu[i] = mu_val
+            vol_val = _VOL_DEFAULT.get(bkt, 0.120)
         stat_vol[i] = vol_val
 
-    # ── 3. Costruisce μ vettore ────────────────────────────────────────────
+    # ── 3. Costruisce μ vettore (solo prior di categoria) ─────────────────
     mu_vals = {}
     for i in all_isins:
-        mu_vals[i] = real_mu.get(i, stat_mu.get(i, 0.05))
+        bkt_i = _bucket_of(assets_info.get(i, {}))
+        prior_i = _MU_PRIOR.get(bkt_i, 0.060)
+        if i in real_mu and real_mu[i] < 0:
+            # Asset con rendimento reale negativo: segnale smorzato (media con prior)
+            mu_vals[i] = 0.5 * real_mu[i] + 0.5 * prior_i
+        else:
+            mu_vals[i] = prior_i
     mu = pd.Series(mu_vals)
 
     # ── 4. Costruisce Σ matrice ────────────────────────────────────────────
