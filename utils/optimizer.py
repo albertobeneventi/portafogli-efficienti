@@ -164,19 +164,45 @@ def build_hybrid_mu_sigma(
         p3   = info.get("perf_3y")
         vol  = info.get("volatilita")
         p1   = info.get("perf_1y")
-        # μ annualizzato: perf_3y è CUMULATIVO 3 anni → deve essere annualizzato
-        # Formula: μ_ann = (1 + r_3y_cum)^(1/3) - 1
-        # es. 150% cumulativo → (2.50)^(1/3)-1 ≈ 35.7%/anno
-        # NB: NON usare r_3y/3 (è sbagliato per rendimenti composti)
+        # μ annualizzato con SHRINKAGE verso prior di equilibrio per categoria
+        #
+        # Problema: usare perf_3y storica come μ atteso porta a selezionare
+        # i fondi col miglior passato (bias da selezione a posteriori).
+        # Un fondo che ha fatto +180% in 3 anni NON farà +180% nei prossimi 3.
+        #
+        # Soluzione: μ_adj = α × μ_storico + (1-α) × μ_prior_categoria
+        # dove α = 0.30 (peso basso al passato) e μ_prior è il rendimento
+        # "neutro" atteso per la categoria sull'orizzonte forward.
+        #
+        # Prior di equilibrio (stime conservative forward-looking, area Euro):
+        #   Azionario:      7-8% anno (equity risk premium ~5% + risk-free ~2.5%)
+        #   Obbligazionario: 3%  anno (rendimento corrente mercato europeo IG)
+        #   Bilanciato:     5%  anno
+        #   Alternativo:    4%  anno
+        #   Monetario:      2.5% anno
+        _MU_PRIOR = {
+            "Azionario":      0.075,
+            "Obbligazionario":0.030,
+            "Bilanciato":     0.050,
+            "Alternativo":    0.040,
+            "Monetario":      0.025,
+            "ETF":            0.070,
+            "Azione":         0.080,
+        }
+        _SHRINK_ALPHA = 0.30   # 30% peso al passato, 70% al prior
+        bkt_mu = _bucket_of(assets_info.get(i, {}))
+        mu_prior = _MU_PRIOR.get(bkt_mu, 0.060)
+
         if p3 is not None and not (isinstance(p3, float) and np.isnan(p3)):
-            r3 = float(p3) / 100.0          # cumulativo decimale, es. 1.5134
-            # Limita r3 a range [-0.99, +9.0] per evitare overflow (fondi anomali)
+            r3 = float(p3) / 100.0
             r3 = max(-0.99, min(r3, 9.0))
-            mu_val = (1.0 + r3) ** (1.0 / 3.0) - 1.0   # annualizzato
+            mu_hist = (1.0 + r3) ** (1.0 / 3.0) - 1.0   # annualizzato da cumulativo 3Y
+            mu_val  = _SHRINK_ALPHA * mu_hist + (1.0 - _SHRINK_ALPHA) * mu_prior
         elif p1 is not None and not (isinstance(p1, float) and np.isnan(p1)):
-            mu_val = float(p1) / 100.0 * 0.8   # già annualizzato, smorzamento prudenziale
+            mu_hist = float(p1) / 100.0   # già annualizzato
+            mu_val  = _SHRINK_ALPHA * mu_hist * 0.8 + (1.0 - _SHRINK_ALPHA) * mu_prior
         else:
-            mu_val = 0.05
+            mu_val = mu_prior
         # σ: usa volatilita se disponibile, default basato su categoria
         # Floor realistici per categoria (valori di mercato europeo 2015-2024)
         _VOL_FLOOR = {

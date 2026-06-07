@@ -1569,11 +1569,13 @@ elif nav == "📈 Frontiera Efficiente":
         st.markdown("---")
         st.subheader("📊 Risultati Ottimizzazione")
         st.caption(
-            "⚠️ **Nota**: Rendimento e Volatilità sono stime del modello basate sulle "
-            "performance storiche a 3 anni dei fondi selezionati — non sono previsioni garantite. "
-            "Il **rendimento annualizzato** è ottenuto da perf_3y annualizzata [(1+r)^(1/3)-1]; "
-            "il cumulativo 3Y indicato come delta è ricostruito da quel valore. "
-            "Sharpe = (rendimento annuo − tasso risk-free 2.5%) / volatilità annua."
+            "⚠️ **Nota metodologica**: Il rendimento atteso **non è il rendimento storico**. "
+            "Il modello applica uno *shrinkage* (Stein): μ = 30% × storico annualizzato + 70% × prior di equilibrio per categoria "
+            "(Azionario 7.5%, Obbligazionario 3%, Bilanciato 5%). "
+            "Questo riduce il bias da selezione a posteriori: l'ottimizzatore non sceglie solo i fondi "
+            "con il miglior passato ma bilancia storia e aspettative forward-looking. "
+            "Volatilità = stima annualizzata da Excel con floor categoriali minimi. "
+            "Sharpe = (rendimento annuo − 2.5% risk-free) / volatilità annua. Non sono previsioni garantite."
         )
 
         # KPI
