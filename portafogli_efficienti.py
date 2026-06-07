@@ -875,19 +875,34 @@ elif nav == "📈 Frontiera Efficiente":
                 _added_local += 1
             return _added_local
 
-        _added  = _replace_with_azimut(az_sel, _n_az_to_add, "Azioni")
-        _added += _replace_with_azimut(ob_sel, _n_ob_to_add, "Obbligazioni")
+        # Conta quanti Azimut disponibili per macro PRIMA di sostituire
+        _az_avail_az = sum(1 for e in _az_pool if e["_macro"] == "Azioni" and e["isin"] not in _result)
+        _az_avail_ob = sum(1 for e in _az_pool if e["_macro"] == "Obbligazioni" and e["isin"] not in _result)
 
-        # Quota residua: sostituisce qualsiasi terzo (bucket misto o Mat. Prime)
+        # Ridistribuisce le quote se Azimut non ha abbastanza fondi in un bucket:
+        # i "mancanti" obbligazionari vengono compensati con più azioni Azimut
+        # (sostituendo posti AZIONI, non obbligazioni → le obbligazioni restano intatte)
+        _real_ob_add = min(_n_ob_to_add, _az_avail_ob)
+        _real_az_add = min(_n_az_to_add + (_n_ob_to_add - _real_ob_add), _az_avail_az)
+
+        _added  = _replace_with_azimut(az_sel, _real_az_add, "Azioni")
+        _added += _replace_with_azimut(ob_sel, _real_ob_add, "Obbligazioni")
+
+        # Quota residua (Azimut di qualsiasi macro → sostituisce SOLO posti azioni,
+        # per non toccare le obbligazioni selezionate)
         _still_need = _need - _added
         if _still_need > 0:
-            _any_replaceable = [i for i in _result if i not in _az_isins and i not in _forced]
+            _az_replaceable = [i for i in (az_sel or [])
+                               if i in _result and i not in _az_isins and i not in _forced]
+            if not _az_replaceable:  # nessun posto azioni disponibile → prende qualsiasi
+                _az_replaceable = [i for i in _result if i not in _az_isins and i not in _forced
+                                   and i not in (ob_sel or [])]  # evita obbligazioni
             for _entry in _az_pool:
-                if _still_need <= 0 or not _any_replaceable:
+                if _still_need <= 0 or not _az_replaceable:
                     break
                 if _entry["isin"] in _result:
                     continue
-                _out = _any_replaceable.pop()
+                _out = _az_replaceable.pop()
                 _result.remove(_out)
                 _result.append(_entry["isin"])
                 _forced.append(_entry["isin"])
