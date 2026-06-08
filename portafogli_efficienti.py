@@ -357,15 +357,27 @@ with st.sidebar:
         )
         st.markdown("---")
         st.markdown("**📊 View di Mercato** *(opzionale)*")
+        # Download template
+        _tmpl_path = Path(__file__).parent / "assets" / "view_mercato_template.xlsx"
+        if _tmpl_path.exists():
+            with open(_tmpl_path, "rb") as _tf:
+                st.download_button(
+                    "⬇️ Scarica template Excel",
+                    data=_tf.read(),
+                    file_name="view_mercato_template.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    help="Template compilabile con Pesi, View BL e Preferiti",
+                )
         up_views = st.file_uploader(
-            "File view di mercato",
+            "Carica file view compilato",
             type=["xlsx"],
             key="up_views",
             help=(
                 "Excel con fogli: 'Pesi' (allocazione target per sottocategoria), "
                 "'View' (rendimenti attesi + confidenza per BL), "
                 "'Preferiti' (ISIN da includere). "
-                "Vedi Guida per il formato."
+                "Vedi Guida → 'File View di Mercato' per il formato."
             ),
         )
         _has_new = (up_terzi is not None or up_azimut is not None or up_views is not None)
