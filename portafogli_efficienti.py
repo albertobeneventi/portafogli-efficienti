@@ -3252,9 +3252,13 @@ elif nav == "🌐 ETF Universe":
 
         # Calcola perf e volatilità on-demand via yfinance per ETF visibili
         # (solo se i dati mancano nel file cache)
-        _etf_need_perf = df_display[
-            df_display["perf_1y"].isna() & df_display["ticker"].notna()
-        ]["ticker"].dropna().tolist() if "perf_1y" in df_display.columns else []
+        _etf_need_perf = (
+            df_display[
+                df_display["perf_1y"].isna() & df_display["ticker"].notna()
+            ]["ticker"].dropna().tolist()
+            if ("perf_1y" in df_display.columns and "ticker" in df_display.columns)
+            else []
+        )
 
         if _etf_need_perf:
             with st.spinner(f"Calcolo rendimenti per {len(_etf_need_perf)} ETF…"):
