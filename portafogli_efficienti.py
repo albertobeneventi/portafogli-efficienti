@@ -1135,21 +1135,25 @@ elif nav == "📈 Frontiera Efficiente":
     # =========================================================================
     _prev = st.session_state.get("_fe_form_vals", {})
 
-    with st.form("fe_guided_form", clear_on_submit=False):
-
-        # Step 1: Allocazione
+    # Step 1: Allocazione \u2014 FUORI dal form per feedback colore in tempo reale
+    with st.container(border=True):
         st.markdown("**1 \u2014 Allocazione target (%)**")
         _ac1, _ac2, _ac3 = st.columns(3)
-        _pct_az = _ac1.number_input("Azioni %",        0, 100, _prev.get("pct_az", 60), 5)
-        _pct_ob = _ac2.number_input("Obbligazioni %",  0, 100, _prev.get("pct_ob", 30), 5)
-        _pct_mp = _ac3.number_input("Materie Prime %", 0, 100, _prev.get("pct_mp", 10), 5)
-        _pct_bi = 0   # rimosso: i bilanciati rientrano nell'allocazione obbligazionaria
+        _pct_az = _ac1.number_input("Azioni %",        0, 100, _prev.get("pct_az", 60), 5, key="alloc_az")
+        _pct_ob = _ac2.number_input("Obbligazioni %",  0, 100, _prev.get("pct_ob", 30), 5, key="alloc_ob")
+        _pct_mp = _ac3.number_input("Materie Prime %", 0, 100, _prev.get("pct_mp", 10), 5, key="alloc_mp")
+        _pct_bi = 0
         _total_pct = int(_pct_az) + int(_pct_ob) + int(_pct_mp)
         _tc, _ = st.columns([1, 3])
+        _delta = _total_pct - 100
         if _total_pct == 100:
-            _tc.success(f"Totale: {_total_pct}%  OK")
+            _tc.success(f"\u2705 Totale: 100%")
+        elif _total_pct < 100:
+            _tc.error(f"\u274c Totale: {_total_pct}%  (mancano {-_delta}%)")
         else:
-            _tc.warning(f"Totale: {_total_pct}%  (deve essere 100%)")
+            _tc.error(f"\u274c Totale: {_total_pct}%  (eccedono {_delta}%)")
+
+    with st.form("fe_guided_form", clear_on_submit=False):
 
         st.markdown("---")
 
