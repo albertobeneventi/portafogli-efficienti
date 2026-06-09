@@ -149,7 +149,7 @@ def _fetch_yfinance(ticker: str, period: str = "3y") -> pd.Series | None:
     """Scarica serie mensile da yfinance. Ritorna None se fallisce."""
     try:
         data = yf.download(ticker, period=period, interval="1mo",
-                           auto_adjust=True, progress=False, threads=False)
+                           auto_adjust=True, progress=False)
         if data.empty:
             return None
         # Gestisci sia MultiIndex (multi-ticker) che Index semplice

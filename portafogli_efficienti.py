@@ -3175,9 +3175,11 @@ elif nav == "🌐 ETF Universe":
             from utils.etf_tickers import ISIN_TO_TICKER, TER_VERIFIED
             df_etf = get_static_etf_df()
             df_etf["ticker"] = df_etf["isin"].map(ISIN_TO_TICKER)
-            df_etf["ter"] = df_etf["isin"].map(TER_VERIFIED)
-            df_etf["_fonte_ter"] = df_etf["ter"].apply(lambda x: "KID verificato" if pd.notna(x) else "n/d")
-            df_etf["_fonte_perf"] = "n/d (carica con 🔄)"
+            # TER_VERIFIED sovrascrive solo dove disponibile; fallback su ETF_STATIC ter
+            _ter_override = df_etf["isin"].map(TER_VERIFIED)
+            df_etf["ter"] = _ter_override.fillna(df_etf.get("ter", pd.Series(dtype=float)))
+            df_etf["_fonte_ter"] = _ter_override.apply(lambda x: "KID verificato" if pd.notna(x) else "ETF_STATIC")
+            df_etf["_fonte_perf"] = "n/d (clicca 🔄 Aggiorna rendimenti)"
 
         # Converti valori numerici (potrebbe essere stringa da Excel)
         for _nc in ["ter", "perf_1y", "perf_3y", "perf_5y"]:
@@ -3267,7 +3269,7 @@ elif nav == "🌐 ETF Universe":
                     _hist = _yf.download(
                         " ".join(_etf_need_perf[:30]),  # max 30 alla volta
                         period="3y", interval="1mo",
-                        auto_adjust=True, progress=False, threads=False
+                        auto_adjust=True, progress=False
                     )
                     if not _hist.empty:
                         _close = _hist["Close"] if hasattr(_hist.columns, "levels") else _hist

@@ -351,15 +351,28 @@ def _build_from_yfinance_and_static(extra_isins=None, progress_callback=None) ->
             progress_callback(pct, f"Batch {done}/{total_batches}: {', '.join(batch[:3])}…")
         try:
             tickers_str = " ".join(batch)
+            # threads= rimosso: parametro eliminato in yfinance 0.2.x
             hist = yf.download(tickers_str, period="5y", interval="1mo",
-                               auto_adjust=True, progress=False, threads=False)
-            # Gestisci sia MultiIndex (più ticker) che Index semplice (1 ticker)
-            if hasattr(hist.columns, "levels"):
-                close = hist["Close"] if "Close" in hist.columns.get_level_values(0) else hist
+                               auto_adjust=True, progress=False)
+            if hist.empty:
+                continue
+            # yfinance 0.2.x: MultiIndex (field, ticker); versioni precedenti: Index semplice
+            if isinstance(hist.columns, pd.MultiIndex):
+                # nuovo formato: (Price, Ticker) — es. ("Close", "SWDA.MI")
+                if "Close" in hist.columns.get_level_values(0):
+                    close = hist["Close"]
+                elif "Adj Close" in hist.columns.get_level_values(0):
+                    close = hist["Adj Close"]
+                else:
+                    continue
             else:
-                close = hist[["Close"]] if "Close" in hist.columns else hist
-                if len(batch) == 1:
-                    close.columns = batch
+                # vecchio formato: colonne semplici
+                if "Close" in hist.columns:
+                    close = hist[["Close"]]
+                    if len(batch) == 1:
+                        close = close.rename(columns={"Close": batch[0]})
+                else:
+                    continue
 
             for ticker in batch:
                 col = ticker if ticker in close.columns else None
