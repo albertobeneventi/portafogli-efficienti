@@ -389,10 +389,19 @@ with st.sidebar:
                 st.rerun()
         if st.button("🗑️ Dimentica file caricati", use_container_width=True,
                      help="Cancella i dati dalla memoria e torna in modalità Demo"):
-            for _k in ["_terzi_bytes_cached","_azimut_bytes_cached",
+            for _k in ["_terzi_bytes_cached","_azimut_bytes_cached","_views_bytes_cached",
                        "_terzi_upload_ts","_azimut_upload_ts",
-                       "_terzi_upload_name","_azimut_upload_name"]:
+                       "_terzi_upload_name","_azimut_upload_name","_views_upload_name"]:
                 st.session_state.pop(_k, None)
+            # Cancella anche i file su disco
+            try:
+                _ud = DATA_DIR / "uploaded"
+                for _fn in ("terzi.xlsx", "azimut.xlsx", "views.xlsx"):
+                    _fp = _ud / _fn
+                    if _fp.exists():
+                        _fp.unlink()
+            except Exception:
+                pass
             _load_all_data.clear()
             _load_preselection.clear()
             st.rerun()
@@ -401,17 +410,61 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# CARICAMENTO DATI — con persistenza bytes in session_state
+# PERSISTENZA FILE SU DISCO
+# I file caricati vengono salvati in DATA_DIR/uploaded/ e ricaricati
+# automaticamente a ogni nuova sessione (refresh, nuova tab, riavvio app).
 # ---------------------------------------------------------------------------
-# Se l'utente ha caricato nuovi file → salva bytes + timestamp
+_UPLOAD_DIR = DATA_DIR / "uploaded"
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+_PERSIST_MAP = {
+    # session_key_bytes       : (disk_file,           session_key_ts,         session_key_name)
+    "_terzi_bytes_cached"  : ("terzi.xlsx",  "_terzi_upload_ts",  "_terzi_upload_name"),
+    "_azimut_bytes_cached" : ("azimut.xlsx", "_azimut_upload_ts", "_azimut_upload_name"),
+    "_views_bytes_cached"  : ("views.xlsx",  None,                "_views_upload_name"),
+}
+
+def _persist_save(key_bytes: str, raw: bytes, name: str | None = None):
+    """Salva bytes su disco e aggiorna session_state."""
+    fname, key_ts, key_name = _PERSIST_MAP[key_bytes]
+    st.session_state[key_bytes] = raw
+    if key_ts:
+        st.session_state[key_ts] = datetime.now()
+    if key_name and name:
+        st.session_state[key_name] = name
+    try:
+        (_UPLOAD_DIR / fname).write_bytes(raw)
+    except Exception:
+        pass
+
+def _persist_load_all():
+    """All'avvio, legge i file salvati su disco se session_state è vuoto."""
+    for key_bytes, (fname, key_ts, key_name) in _PERSIST_MAP.items():
+        if key_bytes not in st.session_state:
+            fp = _UPLOAD_DIR / fname
+            if fp.exists():
+                try:
+                    raw = fp.read_bytes()
+                    st.session_state[key_bytes] = raw
+                    if key_ts and key_ts not in st.session_state:
+                        st.session_state[key_ts] = datetime.fromtimestamp(fp.stat().st_mtime)
+                    if key_name and key_name not in st.session_state:
+                        st.session_state[key_name] = fname
+                except Exception:
+                    pass
+
+_persist_load_all()
+
+# ---------------------------------------------------------------------------
+# CARICAMENTO DATI — con persistenza bytes in session_state + disco
+# ---------------------------------------------------------------------------
+# Se l'utente ha caricato nuovi file → salva bytes + timestamp + file su disco
 try:
     _up_t = st.session_state.get("up_terzi")
     if _up_t is not None:
         _new_bytes = _up_t.getvalue()
         if _new_bytes:
-            st.session_state["_terzi_bytes_cached"]   = _new_bytes
-            st.session_state["_terzi_upload_ts"]      = datetime.now()
-            st.session_state["_terzi_upload_name"]    = _up_t.name
+            _persist_save("_terzi_bytes_cached", _new_bytes, _up_t.name)
 except Exception:
     pass
 
@@ -420,9 +473,7 @@ try:
     if _up_a is not None:
         _new_bytes = _up_a.getvalue()
         if _new_bytes:
-            st.session_state["_azimut_bytes_cached"]  = _new_bytes
-            st.session_state["_azimut_upload_ts"]     = datetime.now()
-            st.session_state["_azimut_upload_name"]   = _up_a.name
+            _persist_save("_azimut_bytes_cached", _new_bytes, _up_a.name)
 except Exception:
     pass
 
@@ -431,8 +482,7 @@ try:
     if _up_v is not None:
         _new_bytes = _up_v.getvalue()
         if _new_bytes:
-            st.session_state["_views_bytes_cached"] = _new_bytes
-            st.session_state["_views_upload_name"]  = _up_v.name
+            _persist_save("_views_bytes_cached", _new_bytes, _up_v.name)
 except Exception:
     pass
 

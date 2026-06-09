@@ -11,3 +11,6 @@ __pycache__/
 # File dati proprietari — non committare
 tabella_fondi_arricchita.xlsx
 fondi_azimut_isin_completo_RATED.xlsx
+
+# File caricati dagli utenti — persistenza locale, mai su git
+data/uploaded/
