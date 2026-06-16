@@ -3085,7 +3085,29 @@ elif nav == "🔀 Comparatore":
                     for _, _r in _bdf.iterrows():
                         _pq_weights[_r.get("isin","")] = (_r.get("_peso_fondo",0) or 0) / 100
             if _pq_weights:
-                _comp_portfolios["Qualità"] = {"weights": _pq_weights, "ret": None, "vol": None, "sharpe": None}
+                _pq_ret = _pq_vol = _pq_sharpe = None
+                try:
+                    from utils.optimizer import build_hybrid_mu_sigma
+                    _pq_info = {
+                        isin: df_unified.loc[df_unified["isin"] == isin].iloc[0].to_dict()
+                        for isin in _pq_weights if (df_unified["isin"] == isin).any()
+                    }
+                    _rfr = st.session_state.get("risk_free_rate", 2.5) / 100
+                    _pq_mu, _pq_cov = build_hybrid_mu_sigma(_pq_info, {}, risk_free_rate=_rfr)
+                    _pq_isins_ok = [i for i in _pq_weights if i in _pq_mu.index]
+                    if _pq_isins_ok:
+                        _w_ser = pd.Series({i: _pq_weights[i] for i in _pq_isins_ok})
+                        _w_ser = _w_ser / _w_ser.sum()  # rinormalizza sul sottoinsieme con dati
+                        _pq_ret = float((_w_ser * _pq_mu[_pq_isins_ok]).sum())
+                        _pq_vol = float(np.sqrt(
+                            _w_ser.values @ _pq_cov.loc[_pq_isins_ok, _pq_isins_ok].values @ _w_ser.values
+                        ))
+                        _pq_sharpe = (_pq_ret - _rfr) / _pq_vol if _pq_vol > 0 else None
+                except Exception:
+                    pass
+                _comp_portfolios["Qualità"] = {
+                    "weights": _pq_weights, "ret": _pq_ret, "vol": _pq_vol, "sharpe": _pq_sharpe,
+                }
         except Exception:
             pass
 
