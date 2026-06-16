@@ -30,6 +30,7 @@ from utils.data_loader import (
 from utils.scoring import compute_scores_df
 from utils.constraints import (
     build_lista_a, build_lista_b, PROFILI, build_portfolio_quality, classify_bucket,
+    strategy_root,
 )
 from utils.etf_fetcher import (
     load_etf_universe, fetch_etf_universe, HARDCODED_ISINS, CATEGORY_MAP,
@@ -2625,6 +2626,13 @@ elif nav == "⭐ Portafoglio Qualità":
                 _n_az_pq_avail = int((df_unified["_source"] == "azimut").sum())
         except Exception:
             pass
+        solo_azimut_pq = st.checkbox(
+            "🔵 Tutti fondi Azimut (dove disponibili)",
+            value=False, key="pq_solo_azimut",
+            help="Riempie ogni bucket esclusivamente con fondi Azimut (deduplicati per "
+                 "share class), nel limite di quanti disponibili per quel bucket. "
+                 "Gli slot senza un fondo Azimut adeguato restano coperti dai fondi terzi.",
+        )
         n_min_az_pq = st.number_input(
             "Min fondi Azimut",
             min_value=0, max_value=50,
@@ -2635,7 +2643,7 @@ elif nav == "⭐ Portafoglio Qualità":
                 "Ricerca nel catalogo completo Azimut per Score Qualità, "
                 "distribuiti nei bucket più adatti per classificazione."
             ),
-            disabled=False,
+            disabled=solo_azimut_pq,
         )
         if _n_az_pq_avail > 0:
             st.caption(f"📘 {_n_az_pq_avail} fondi Azimut nel catalogo")
@@ -2682,48 +2690,87 @@ elif nav == "⭐ Portafoglio Qualità":
         )
 
     # ── INIEZIONE FONDI AZIMUT ──────────────────────────────────────────────
-    if n_min_az_pq > 0:
-        # Costruisce lista Azimut ordinata per score dal catalogo completo
+    if n_min_az_pq > 0 or solo_azimut_pq:
+        # Costruisce pool Azimut deduplicato per fondo (stesso fondo, share class
+        # diverse → stesso strategy_root) e ordinato per score dal catalogo completo
         _pq_az_ranked = []
+        _az_src_pq = pd.DataFrame()
         try:
             from utils.scoring import compute_scores_df as _pq_css
             from utils.data_loader import build_unified_fund_df as _pq_buf
-            _az_src_pq = pd.DataFrame()
             if not df_azimut.empty:
                 _az_src_pq = _pq_buf(pd.DataFrame(), df_azimut)
             elif not df_unified.empty and "_source" in df_unified.columns:
                 _az_src_pq = df_unified[df_unified["_source"] == "azimut"].copy()
             if not _az_src_pq.empty:
                 _az_src_pq = _pq_css(_az_src_pq)
+                _az_src_pq["_strat_key"] = _az_src_pq["nome"].apply(strategy_root)
+                _az_src_pq = (
+                    _az_src_pq.sort_values("score_qualita", ascending=False)
+                    .drop_duplicates(subset=["_strat_key"], keep="first")
+                )
                 _az_src_pq = _az_src_pq.sort_values("score_qualita", ascending=False)
                 _pq_az_ranked = _az_src_pq["isin"].dropna().tolist()
         except Exception:
             pass
 
-        # Conta quanti fondi Azimut sono già presenti nel portafoglio
-        _az_in_pq = set()
+        # Conta quanti fondi Azimut (per strategy_root) sono già presenti nel portafoglio
+        _az_strat_in_pq = set()
         for _bk_df in portfolio_buckets.values():
             if _bk_df is not None and not _bk_df.empty and "isin" in _bk_df.columns:
                 for _isin_chk in _bk_df["isin"].tolist():
-                    if _isin_chk in set(_pq_az_ranked):
-                        _az_in_pq.add(_isin_chk)
+                    _match = _az_src_pq[_az_src_pq["isin"] == _isin_chk] if not _az_src_pq.empty else pd.DataFrame()
+                    if not _match.empty:
+                        _az_strat_in_pq.add(_match.iloc[0]["_strat_key"])
 
-        _az_need = int(n_min_az_pq) - len(_az_in_pq)
-
-        # Bucket disponibili nel portafoglio corrente
         _available_buckets = [k for k, v in portfolio_buckets.items()
                                if v is not None and not v.empty]
 
-        if _az_need > 0 and _pq_az_ranked:
+        if solo_azimut_pq and not _az_src_pq.empty:
+            # ── Riempie ogni bucket il più possibile con fondi Azimut distinti ──
+            _az_src_pq["_bucket"] = _az_src_pq["classificazione"].apply(classify_bucket)
             _added_az = 0
+            _used_strat = set()
+            for _bucket_name, _bk_df in list(portfolio_buckets.items()):
+                _capacity = len(_bk_df) if _bk_df is not None and not _bk_df.empty else fondi_per_bucket
+                _cands = _az_src_pq[_az_src_pq["_bucket"] == _bucket_name]
+                _cands = _cands[~_cands["_strat_key"].isin(_used_strat)]
+                _cands = _cands.sort_values("score_qualita", ascending=False).head(_capacity)
+                if _cands.empty:
+                    continue
+                _new_bucket = _cands.drop(columns=["_strat_key", "_bucket"], errors="ignore").copy()
+                _new_bucket["_peso_bucket"] = alloc_adj.get(_bucket_name, 10)
+
+                # Riempie eventuali slot residui con i migliori fondi terzi originali
+                _remaining = _capacity - len(_new_bucket)
+                if _remaining > 0 and _bk_df is not None and not _bk_df.empty:
+                    _fillers = _bk_df[~_bk_df["isin"].isin(_new_bucket["isin"])].head(_remaining)
+                    _new_bucket = pd.concat([_new_bucket, _fillers], ignore_index=True)
+
+                _n_new = len(_new_bucket)
+                _new_bucket["_peso_fondo"] = round(alloc_adj.get(_bucket_name, 10) / _n_new, 1) if _n_new else 0
+                portfolio_buckets[_bucket_name] = _new_bucket
+                _used_strat.update(_cands["_strat_key"].tolist())
+                _added_az += len(_cands)
+
+            if _added_az > 0:
+                st.info(f"🔵 **{_added_az} fondi Azimut distinti** usati per riempire i bucket "
+                        f"(deduplicati per share class).")
+            else:
+                st.warning("⚠️ Nessun fondo Azimut compatibile trovato per i bucket attuali.")
+
+        elif n_min_az_pq > 0 and _pq_az_ranked:
+            _az_need = int(n_min_az_pq) - len(_az_strat_in_pq)
+            _added_az = 0
+            _added_names = []
             for _az_isin in _pq_az_ranked:
                 if _added_az >= _az_need:
                     break
-                if _az_isin in _az_in_pq:
-                    continue
-
                 _az_row = _az_src_pq[_az_src_pq["isin"] == _az_isin]
                 if _az_row.empty:
+                    continue
+                _strat_k = _az_row.iloc[0]["_strat_key"]
+                if _strat_k in _az_strat_in_pq:
                     continue
 
                 _az_class = str(_az_row.iloc[0].get("classificazione", ""))
@@ -2731,7 +2778,6 @@ elif nav == "⭐ Portafoglio Qualità":
 
                 # Se il bucket non esiste nel portafoglio, scegli il più vicino disponibile
                 if _az_bucket not in _available_buckets or _az_bucket == "Altro":
-                    # Priorità: Azionario > Obbligazionario > Bilanciato > primo disponibile
                     for _fallback in ["Azionario", "Obbligazionario", "Bilanciato"]:
                         if _fallback in _available_buckets:
                             _az_bucket = _fallback
@@ -2740,15 +2786,19 @@ elif nav == "⭐ Portafoglio Qualità":
                         _az_bucket = _available_buckets[0] if _available_buckets else "Azionario"
 
                 # Crea entry fondo Azimut con colonne minime necessarie
-                _az_entry = _az_row.iloc[0].to_dict()
+                _az_entry = _az_row.drop(labels=["_strat_key"], errors="ignore").iloc[0].to_dict()
                 _az_entry["_peso_bucket"] = alloc_adj.get(_az_bucket, 10)
                 _az_df_new = pd.DataFrame([_az_entry])
 
-                # Aggiunge al bucket e ricalcola pesi equi
-                if _az_bucket in portfolio_buckets and portfolio_buckets[_az_bucket] is not None:
+                # Aggiunge al bucket (dedup per ISIN e per share class) e ricalcola pesi equi
+                if _az_bucket in portfolio_buckets and portfolio_buckets[_az_bucket] is not None \
+                        and not portfolio_buckets[_az_bucket].empty:
                     _existing = portfolio_buckets[_az_bucket]
                     _combined = pd.concat([_az_df_new, _existing], ignore_index=True)
                     _combined = _combined.drop_duplicates(subset=["isin"])
+                    _combined["_strat_tmp"] = _combined["nome"].apply(strategy_root)
+                    _combined = _combined.drop_duplicates(subset=["_strat_tmp"], keep="first")
+                    _combined = _combined.drop(columns=["_strat_tmp"], errors="ignore")
                     _n_new = len(_combined)
                     _combined["_peso_fondo"] = round(alloc_adj.get(_az_bucket, 10) / _n_new, 1)
                     portfolio_buckets[_az_bucket] = _combined
@@ -2759,21 +2809,19 @@ elif nav == "⭐ Portafoglio Qualità":
                     portfolio_buckets[_az_bucket] = _az_df_new
                     _available_buckets.append(_az_bucket)
 
-                _az_in_pq.add(_az_isin)
+                _az_strat_in_pq.add(_strat_k)
+                _added_names.append(str(_az_row.iloc[0].get("nome", _az_isin))[:30])
                 _added_az += 1
 
             if _added_az > 0:
-                _az_names = [str(_az_src_pq[_az_src_pq["isin"]==i]["nome"].values[0])[:30]
-                             if not _az_src_pq[_az_src_pq["isin"]==i].empty else i
-                             for i in list(_az_in_pq)[:3]]
                 st.info(
                     f"🔵 **{_added_az} fondi Azimut aggiunti** al portafoglio: "
-                    f"{', '.join(_az_names)}"
-                    + (f" e altri {len(_az_in_pq)-3}" if len(_az_in_pq) > 3 else "")
+                    f"{', '.join(_added_names[:3])}"
+                    + (f" e altri {len(_added_names)-3}" if len(_added_names) > 3 else "")
                 )
             elif n_min_az_pq > 0:
-                st.warning(f"⚠️ Richiesti {n_min_az_pq} fondi Azimut ma catalogo vuoto o "
-                           f"file non caricato. Carica il file Azimut dalla sidebar.")
+                st.warning(f"⚠️ Richiesti {n_min_az_pq} fondi Azimut ma catalogo vuoto, "
+                           f"file non caricato, o già tutti presenti nel portafoglio.")
 
     # ── VISUALIZZAZIONE BUCKET PER BUCKET ──────────────────────────────────
     BUCKET_COLORS = {

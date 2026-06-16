@@ -16,13 +16,18 @@ GENERALISTE_MACRO_COVER = [
 ]
 
 
-def _strategy_root(name: str) -> str:
-    """Prime 3 parole significative del nome (esclude ACC, MINC, EUR, USD…)."""
+def strategy_root(name: str) -> str:
+    """Prime 3 parole significative del nome (esclude ACC, MINC, EUR, USD…).
+    Usata per individuare share class diverse dello stesso fondo."""
     stop = {"acc", "minc", "eur", "usd", "gbp", "chf", "a", "b", "c", "d",
             "i", "r", "e", "ret", "dist", "distr", "fund", "class", "sicav"}
     words = re.sub(r"[^a-zA-Z0-9\s]", " ", name.lower()).split()
     meaningful = [w for w in words if w not in stop and len(w) > 1]
     return " ".join(meaningful[:3])
+
+
+# Alias retro-compatibile
+_strategy_root = strategy_root
 
 
 def select_top_n_with_constraints(
