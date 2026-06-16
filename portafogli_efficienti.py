@@ -30,7 +30,7 @@ from utils.data_loader import (
 from utils.scoring import compute_scores_df
 from utils.constraints import (
     build_lista_a, build_lista_b, PROFILI, build_portfolio_quality, classify_bucket,
-    strategy_root, build_portfolio_etf,
+    strategy_root, build_portfolio_etf, etf_allocation_for_profilo,
 )
 from utils.etf_fetcher import (
     load_etf_universe, fetch_etf_universe, HARDCODED_ISINS, CATEGORY_MAP,
