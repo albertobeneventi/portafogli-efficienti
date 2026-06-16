@@ -401,13 +401,14 @@ def build_portfolio_etf(
     df_etf: pd.DataFrame,
     profilo: str = "Equilibrato",
     fondi_per_bucket: int = 4,
+    max_per_casa: int = 4,
 ) -> dict:
     """
     Costruisce un portafoglio interamente in ETF con gli stessi criteri di
     build_portfolio_quality: allocazione target per profilo di rischio,
     selezione Score Qualità per bucket con vincoli di diversificazione
-    (max 1 per emittente, max 1 per categoria, max 2 per macro-area,
-    nessun duplicato di share class/strategia).
+    (max max_per_casa per emittente, max 1 per categoria, max 2 per
+    macro-area, nessun duplicato di share class/strategia).
 
     Richiede df_etf con colonne isin, nome, categoria, perf_1y, perf_3y,
     volatilita, ter (perf_1y/perf_3y/volatilita possono essere NaN se non
@@ -450,7 +451,7 @@ def build_portfolio_etf(
             continue
         top = select_top_n_with_constraints(
             sub, n=fondi_per_bucket,
-            max_per_casa=1,
+            max_per_casa=max_per_casa,
             max_per_classificazione=1,
             max_per_macro_area=2,
         )

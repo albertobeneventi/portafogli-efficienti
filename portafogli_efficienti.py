@@ -3074,6 +3074,14 @@ elif nav == "🪙 Portafoglio ETF":
                                           st.session_state.get("etf_fondi_per_bucket", 4),
                                           key="etf_fondi_per_bucket_slider")
         st.session_state["etf_fondi_per_bucket"] = fondi_per_bucket_etf
+        max_per_casa_etf = st.slider(
+            "Max ETF per emittente", 1, 8,
+            st.session_state.get("etf_max_per_casa", 4),
+            key="etf_max_per_casa_slider",
+            help="Quanti strumenti della stessa società di gestione (iShares, Vanguard, "
+                 "Amundi, ecc.) possono coesistere nel portafoglio.",
+        )
+        st.session_state["etf_max_per_casa"] = max_per_casa_etf
     with cfg_e2:
         st.markdown(f"**Allocazioni target — {profilo_etf}** (modificabili)")
         alloc_etf = PROFILI[profilo_etf].copy()
@@ -3143,7 +3151,8 @@ elif nav == "🪙 Portafoglio ETF":
     # ── COSTRUZIONE PORTAFOGLIO ETF ──────────────────────────────────────────
     with st.spinner("Costruzione portafoglio ETF per Score Qualità..."):
         portfolio_buckets_etf = build_portfolio_etf(
-            df_etf_pq, profilo=profilo_etf, fondi_per_bucket=fondi_per_bucket_etf
+            df_etf_pq, profilo=profilo_etf, fondi_per_bucket=fondi_per_bucket_etf,
+            max_per_casa=max_per_casa_etf,
         )
 
     BUCKET_COLORS_ETF = {
