@@ -84,26 +84,33 @@ st.markdown(f"""
     section[data-testid="stSidebar"] {{
         overflow-y: scroll !important;
     }}
-    /* Scrollbar sidebar: sempre visibile, colore chiaro su sfondo navy */
+    /* Scrollbar sidebar: sempre visibile, colore chiaro su sfondo navy.
+       Firefox non supporta ::-webkit-scrollbar → scrollbar-width/-color. */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] > div:first-child {{
+        scrollbar-width: auto !important;
+        scrollbar-color: rgba(255,255,255,0.75) rgba(255,255,255,0.18) !important;
+    }}
     [data-testid="stSidebar"]::-webkit-scrollbar,
     [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar {{
-        width: 8px !important;
+        width: 10px !important;
         display: block !important;
     }}
     [data-testid="stSidebar"]::-webkit-scrollbar-track,
     [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-track {{
-        background: rgba(255,255,255,0.15) !important;
-        border-radius: 4px;
+        background: rgba(255,255,255,0.18) !important;
+        border-radius: 5px;
     }}
     [data-testid="stSidebar"]::-webkit-scrollbar-thumb,
     [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-thumb {{
-        background: rgba(255,255,255,0.55) !important;
-        border-radius: 4px;
+        background: rgba(255,255,255,0.75) !important;
+        border-radius: 5px;
         min-height: 40px;
+        border: 1px solid rgba(255,255,255,0.3);
     }}
     [data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover,
     [data-testid="stSidebar"] > div:first-child::-webkit-scrollbar-thumb:hover {{
-        background: rgba(255,255,255,0.85) !important;
+        background: rgba(255,255,255,0.95) !important;
     }}
     /* Nasconde la freccia collasso sidebar */
     [data-testid="collapsedControl"],
@@ -148,21 +155,6 @@ st.markdown(f"""
     /* Warning/success in sidebar */
     [data-testid="stSidebar"] .stAlert p {{
         color: inherit !important;
-    }}
-    /* Scrollbar sidebar visibile */
-    [data-testid="stSidebar"]::-webkit-scrollbar {{
-        width: 6px;
-    }}
-    [data-testid="stSidebar"]::-webkit-scrollbar-track {{
-        background: rgba(255,255,255,0.1);
-        border-radius: 4px;
-    }}
-    [data-testid="stSidebar"]::-webkit-scrollbar-thumb {{
-        background: rgba(255,255,255,0.4);
-        border-radius: 4px;
-    }}
-    [data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover {{
-        background: rgba(255,255,255,0.7);
     }}
     /* ── Scrollbar dataframe ── */
     [data-testid="stDataFrame"] > div {{
