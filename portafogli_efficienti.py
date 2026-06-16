@@ -3084,7 +3084,7 @@ elif nav == "🪙 Portafoglio ETF":
         st.session_state["etf_max_per_casa"] = max_per_casa_etf
     with cfg_e2:
         st.markdown(f"**Allocazioni target — {profilo_etf}** (modificabili)")
-        alloc_etf = PROFILI[profilo_etf].copy()
+        alloc_etf = etf_allocation_for_profilo(profilo_etf)
         alloc_etf_adj = {}
         cols_alloc_etf = st.columns(len(alloc_etf))
         for i, (bucket, pct) in enumerate(alloc_etf.items()):
@@ -3096,9 +3096,9 @@ elif nav == "🪙 Portafoglio ETF":
         else:
             st.success(f"✅ Totale: {total_alloc_etf}%")
         st.caption(
-            "⚠️ L'universo ETF attuale copre solo Azionario, Obbligazionario e "
-            "Materie Prime (bucket Alternativo) — i bucket Bilanciato/Monetario "
-            "restano vuoti anche se previsti dal profilo."
+            "ℹ️ Allocazione adattata all'universo ETF: niente bucket Bilanciato "
+            "(il suo peso è redistribuito su Azionario/Obbligazionario), e "
+            "Alternativo è qui composto solo da Materie Prime."
         )
 
     st.markdown("---")
@@ -3156,11 +3156,10 @@ elif nav == "🪙 Portafoglio ETF":
         )
 
     BUCKET_COLORS_ETF = {
-        "Azionario":       "#1A2C54",
-        "Obbligazionario": "#2E6DA4",
-        "Bilanciato":      "#5B9BD5",
-        "Monetario":       "#70AD47",
-        "Alternativo":     "#ED7D31",
+        "Azionario":                  "#1A2C54",
+        "Obbligazionario":            "#2E6DA4",
+        "Monetario":                  "#70AD47",
+        "Alternativi-Materie Prime":  "#ED7D31",
     }
 
     all_etf_rows = []

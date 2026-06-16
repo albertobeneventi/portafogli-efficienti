@@ -370,8 +370,33 @@ ETF_CATEGORY_BUCKET = {
     "Obbligazioni Emergenti":          "Obbligazionario",
     "iBonds":                          "Obbligazionario",
     "BTP/Italia":                      "Obbligazionario",
-    "Materie Prime":                   "Alternativo",
+    "Materie Prime":                   "Alternativi-Materie Prime",
 }
+
+
+def etf_allocation_for_profilo(profilo: str) -> dict:
+    """
+    Allocazione target per il Portafoglio ETF, derivata da PROFILI ma adattata
+    all'universo ETF (solo Azionario/Obbligazionario/Materie Prime esistono):
+      - "Bilanciato" eliminato (nessun ETF bilanciato in lista C) — il suo
+        peso viene redistribuito proporzionalmente sui bucket rimanenti.
+      - "Alternativo" rinominato "Alternativi-Materie Prime" (è l'unico
+        contenuto del bucket nell'universo ETF attuale).
+    """
+    base = dict(PROFILI.get(profilo, PROFILI["Equilibrato"]))
+    bilanciato_pct = base.pop("Bilanciato", 0)
+    if "Alternativo" in base:
+        base["Alternativi-Materie Prime"] = base.pop("Alternativo")
+    if bilanciato_pct and base:
+        tot_rest = sum(base.values())
+        for k in list(base.keys()):
+            base[k] = round(base[k] + bilanciato_pct * base[k] / tot_rest)
+        # Corregge eventuali arrotondamenti per tornare a 100
+        diff = 100 - sum(base.values())
+        if diff:
+            _top = max(base, key=base.get)
+            base[_top] += diff
+    return base
 
 
 def classify_bucket_etf(categoria: str) -> str:
@@ -439,7 +464,7 @@ def build_portfolio_etf(
     df = compute_scores_df(df)
     df["_bucket"] = df["categoria"].apply(classify_bucket_etf)
 
-    allocazioni = PROFILI.get(profilo, PROFILI["Equilibrato"])
+    allocazioni = etf_allocation_for_profilo(profilo)
     result = {}
     for bucket in allocazioni:
         sub = df[df["_bucket"] == bucket].copy()
