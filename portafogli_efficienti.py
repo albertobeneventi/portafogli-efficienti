@@ -3133,6 +3133,13 @@ elif nav == "🔀 Comparatore":
                 "N. asset":            n_assets,
             })
         st.dataframe(pd.DataFrame(metrics_rows), use_container_width=True, hide_index=True)
+        if "Qualità" in _comp_portfolios:
+            st.caption(
+                "ℹ️ Rendimento/Volatilità/Sharpe di **Qualità** sono stimati con lo stesso "
+                "metodo ibrido di Frontiera Efficiente (μ da prior di categoria forward-looking, "
+                "non dalla performance storica dei fondi): coerenti per il confronto con gli "
+                "altri portafogli, ma non un backtest né un rendimento garantito."
+            )
 
         # ── PESI AFFIANCATI ──────────────────────────────────────────────
         st.subheader("⚖️ Composizione a confronto")
@@ -3777,6 +3784,12 @@ Per ogni bucket dell'allocazione target:
 
 Puoi **bloccare** un fondo (rimane nel portafoglio indipendentemente dallo score) e
 **sostituire** manualmente un fondo con un alternativo dalla classifica completa del bucket.
+
+**Nota sul Comparatore:** quando confronti Qualità con Max Sharpe/Min Varianza/Black-Litterman,
+Rendimento atteso/Volatilità/Sharpe di Qualità sono stimati con lo stesso metodo ibrido usato
+in Frontiera Efficiente — μ da prior di categoria forward-looking (Azionario 7.5%, Obbligazionario
+3%, ecc.), non dalla performance storica dei singoli fondi. Sono coerenti per il confronto con
+gli altri portafogli, ma **non sono un backtest né un rendimento garantito**.
 """)
 
         with st.expander("📈 Regole Frontiera Efficiente"):
