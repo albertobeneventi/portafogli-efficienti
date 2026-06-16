@@ -435,16 +435,23 @@ def export_portfolio_pdf(
         w_dict: dict,
         m_dict: dict,
         note: str = "",
+        new_page: bool = True,
     ):
-        """Aggiunge una sezione portafoglio (titolo + metriche + tabella pesi)."""
-        story.append(HRFlowable(width="100%", thickness=0.8, color=GRAY_MID, spaceAfter=4))
-        story.append(Paragraph(_safe_str(h_title), ParagraphStyle(
-            h_title, parent=styles["Normal"],
-            fontName=_FONT_BOLD, fontSize=13, textColor=h_color,
-            spaceBefore=8, spaceAfter=5,
-        )))
+        """Aggiunge una sezione portafoglio (titolo + metriche + tabella pesi).
+        Ogni sezione parte da una pagina nuova per evitare titoli a metà pagina
+        e sovrapposizioni con la sezione precedente."""
+        if new_page:
+            story.append(PageBreak())
+
+        _header_block = [
+            Paragraph(_safe_str(h_title), ParagraphStyle(
+                h_title, parent=styles["Normal"],
+                fontName=_FONT_BOLD, fontSize=13, textColor=h_color,
+                spaceBefore=0, spaceAfter=5,
+            )),
+        ]
         if note:
-            story.append(Paragraph(_safe_str(note), note_style))
+            _header_block.append(Paragraph(_safe_str(note), note_style))
 
         # Metriche
         m_data = [["Metrica", "Valore"]]
@@ -463,7 +470,11 @@ def export_portfolio_pdf(
             ("TOPPADDING",    (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
-        story.append(KeepTogether([mt]))
+        _header_block.append(mt)
+        # Titolo + nota + tabella metriche restano insieme: se non c'entrano
+        # nella pagina corrente, ReportLab li sposta in blocco alla pagina
+        # successiva invece di spezzarli (niente titoli "orfani" a fondo pagina).
+        story.append(KeepTogether(_header_block))
         story.append(Spacer(1, 0.3 * cm))
 
         # Tabella pesi
@@ -477,7 +488,7 @@ def export_portfolio_pdf(
             col_w = [2.8 * cm, 10.5 * cm, 6.0 * cm, 2.0 * cm, 2.2 * cm, 2.2 * cm]
         else:
             hdr   = ["ISIN", "Nome / Fondo", "Asset Class", "Peso %", "Perf 3Y %"]
-            col_w = [2.8 * cm, 12.5 * cm, 7.0 * cm, 2.0 * cm, 2.4 * cm]
+            col_w = [2.8 * cm, 11.9 * cm, 7.0 * cm, 2.0 * cm, 2.4 * cm]
 
         w_data = [hdr]
         for isin, w in sorted(w_dict.items(), key=lambda x: -x[1]):
