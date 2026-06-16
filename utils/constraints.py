@@ -348,3 +348,127 @@ def build_portfolio_quality(
         top["_peso_fondo"] = round(allocazioni[bucket] / len(top), 1) if len(top) else 0
         result[bucket] = top
     return result
+
+
+# ---------------------------------------------------------------------------
+# PORTAFOGLIO ETF — stessa logica di build_portfolio_quality ma sull'universo
+# ETF (Lista C) invece che sui fondi terzi/Azimut.
+# ---------------------------------------------------------------------------
+
+# Mappa esplicita categoria ETF → bucket macro. classify_bucket() non va bene
+# qui: usa un match con word-boundary che fallisce su "Azioni Mondo" (la "i"
+# dopo "azion" non è un confine di parola) — serve una mappa diretta perché
+# le categorie ETF sono un set chiuso e noto (vedi utils/etf_static.py).
+ETF_CATEGORY_BUCKET = {
+    "Azioni Mondo":                    "Azionario",
+    "Azioni USA":                      "Azionario",
+    "Azioni Europa":                   "Azionario",
+    "Azioni Emergenti":                "Azionario",
+    "Obbligazioni Governativi EUR":    "Obbligazionario",
+    "Obbligazioni Societari EUR":      "Obbligazionario",
+    "Obbligazioni High Yield":         "Obbligazionario",
+    "Obbligazioni Emergenti":          "Obbligazionario",
+    "iBonds":                          "Obbligazionario",
+    "BTP/Italia":                      "Obbligazionario",
+    "Materie Prime":                   "Alternativo",
+}
+
+
+def classify_bucket_etf(categoria: str) -> str:
+    """Bucket macro per una categoria ETF (vedi ETF_CATEGORY_BUCKET)."""
+    return ETF_CATEGORY_BUCKET.get(str(categoria).strip(), "Altro")
+
+
+# Emittenti riconosciuti nel nome ETF, per il vincolo di diversificazione
+# max_per_casa (altrimenti "casa" sarebbe sempre vuota/uguale per tutti).
+_ETF_PROVIDERS = [
+    "iShares", "Vanguard", "Xtrackers", "Amundi", "SPDR", "Invesco",
+    "UBS", "HSBC", "WisdomTree", "VanEck", "L&G", "PIMCO", "Lyxor",
+    "JPMorgan", "Fidelity", "DWS",
+]
+
+
+def etf_provider(nome: str) -> str:
+    """Estrae l'emittente dal nome dell'ETF (per diversificazione max_per_casa)."""
+    n = str(nome)
+    for p in _ETF_PROVIDERS:
+        if p.lower() in n.lower():
+            return p
+    return "Altro"
+
+
+def build_portfolio_etf(
+    df_etf: pd.DataFrame,
+    profilo: str = "Equilibrato",
+    fondi_per_bucket: int = 4,
+) -> dict:
+    """
+    Costruisce un portafoglio interamente in ETF con gli stessi criteri di
+    build_portfolio_quality: allocazione target per profilo di rischio,
+    selezione Score Qualità per bucket con vincoli di diversificazione
+    (max 1 per emittente, max 1 per categoria, max 2 per macro-area,
+    nessun duplicato di share class/strategia).
+
+    Richiede df_etf con colonne isin, nome, categoria, perf_1y, perf_3y,
+    volatilita, ter (perf_1y/perf_3y/volatilita possono essere NaN se non
+    ancora arricchite via fetch_etf_perf_vol — quegli ETF avranno score 0
+    e verranno scartati a parità con altri se ci sono alternative valide).
+
+    I bucket "Bilanciato" e "Monetario" non hanno equivalenti nell'universo
+    ETF attuale (solo azionari/obbligazionari/materie prime): restano vuoti.
+    """
+    df = df_etf.copy()
+    df["classificazione"] = df["categoria"]
+    df["casa"] = df["nome"].apply(etf_provider)
+    df["rating_fida"] = None
+    for _c in ("perf_2022", "perf_2023", "perf_2024"):
+        if _c not in df.columns:
+            df[_c] = None
+    # Tiebreaker: a parità di score, preferisci il TER più basso (riusa la
+    # colonna "retrocessione" già gestita da select_top_n_with_constraints).
+    if "ter" in df.columns:
+        _ter = pd.to_numeric(df["ter"], errors="coerce")
+        df["retrocessione"] = -_ter.fillna(_ter.mean() if _ter.notna().any() else 0.5)
+    else:
+        df["retrocessione"] = 0.0
+    df["_macro_area"] = df.apply(
+        lambda r: _infer_macro_area_etf(str(r.get("categoria", "")) + " " + str(r.get("nome", ""))),
+        axis=1,
+    )
+    df = compute_scores_df(df)
+    df["_bucket"] = df["categoria"].apply(classify_bucket_etf)
+
+    allocazioni = PROFILI.get(profilo, PROFILI["Equilibrato"])
+    result = {}
+    for bucket in allocazioni:
+        sub = df[df["_bucket"] == bucket].copy()
+        # Solo ETF con almeno una performance reale: altrimenti lo score è 0
+        # e la selezione sarebbe arbitraria (decisa solo dal tiebreaker TER).
+        sub = sub[sub["perf_3y"].notna() | sub["perf_1y"].notna()]
+        if sub.empty:
+            result[bucket] = pd.DataFrame()
+            continue
+        top = select_top_n_with_constraints(
+            sub, n=fondi_per_bucket,
+            max_per_casa=1,
+            max_per_classificazione=1,
+            max_per_macro_area=2,
+        )
+        top["_peso_bucket"] = allocazioni[bucket]
+        top["_peso_fondo"] = round(allocazioni[bucket] / len(top), 1) if len(top) else 0
+        result[bucket] = top
+    return result
+
+
+def _infer_macro_area_etf(testo: str) -> str:
+    """Versione minimale di _infer_macro_area (data_loader.py) per categorie ETF."""
+    t = testo.lower()
+    if "usa" in t or "s&p" in t or "nasdaq" in t:
+        return "US"
+    if "europa" in t or "stoxx" in t or "eur" in t or "italia" in t or "btp" in t:
+        return "Europe"
+    if "emergenti" in t:
+        return "Emerging"
+    if "mondo" in t or "world" in t or "globale" in t:
+        return "Global"
+    return "Other"

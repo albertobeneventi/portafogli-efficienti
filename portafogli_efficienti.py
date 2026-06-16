@@ -30,10 +30,11 @@ from utils.data_loader import (
 from utils.scoring import compute_scores_df
 from utils.constraints import (
     build_lista_a, build_lista_b, PROFILI, build_portfolio_quality, classify_bucket,
-    strategy_root,
+    strategy_root, build_portfolio_etf,
 )
 from utils.etf_fetcher import (
     load_etf_universe, fetch_etf_universe, HARDCODED_ISINS, CATEGORY_MAP,
+    fetch_etf_perf_vol,
 )
 from utils.nav_fetcher import get_multiple_nav, get_nav_series
 from utils.optimizer import (
@@ -548,6 +549,7 @@ with st.sidebar:
             "🏠 Home",
             "📈 Frontiera Efficiente",
             "⭐ Portafoglio Qualità",
+            "🪙 Portafoglio ETF",
             "🔀 Comparatore",
             "🌐 ETF Universe",
             "📖 Guida",
@@ -3049,6 +3051,228 @@ elif nav == "⭐ Portafoglio Qualità":
             exp_c2.download_button("📄 Esporta PDF", data=pdf_q,
                 file_name=f"portafoglio_qualita_{profilo.lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
                 mime="application/pdf")
+
+
+# ===========================================================================
+# PORTAFOGLIO ETF — stessi criteri del Portafoglio Qualità, solo ETF
+# ===========================================================================
+elif nav == "🪙 Portafoglio ETF":
+    st.title("🪙 Portafoglio ETF")
+    st.markdown(
+        "Stessa logica del Portafoglio Qualità (Score Qualità per bucket, con vincoli "
+        "di diversificazione), applicata esclusivamente all'universo ETF (Lista C)."
+    )
+
+    cfg_e1, cfg_e2 = st.columns([1, 2])
+    with cfg_e1:
+        profilo_etf = st.selectbox(
+            "Profilo di rischio", list(PROFILI.keys()),
+            index=list(PROFILI.keys()).index(st.session_state["profilo"]),
+            key="profilo_etf_select",
+        )
+        fondi_per_bucket_etf = st.slider("ETF per bucket", 2, 8,
+                                          st.session_state.get("etf_fondi_per_bucket", 4),
+                                          key="etf_fondi_per_bucket_slider")
+        st.session_state["etf_fondi_per_bucket"] = fondi_per_bucket_etf
+    with cfg_e2:
+        st.markdown(f"**Allocazioni target — {profilo_etf}** (modificabili)")
+        alloc_etf = PROFILI[profilo_etf].copy()
+        alloc_etf_adj = {}
+        cols_alloc_etf = st.columns(len(alloc_etf))
+        for i, (bucket, pct) in enumerate(alloc_etf.items()):
+            alloc_etf_adj[bucket] = cols_alloc_etf[i].number_input(
+                f"{bucket} (%)", 0, 100, pct, 5, key=f"alloc_etf_{bucket}")
+        total_alloc_etf = sum(alloc_etf_adj.values())
+        if total_alloc_etf != 100:
+            st.warning(f"⚠️ Totale: {total_alloc_etf}% — deve essere 100%")
+        else:
+            st.success(f"✅ Totale: {total_alloc_etf}%")
+        st.caption(
+            "⚠️ L'universo ETF attuale copre solo Azionario, Obbligazionario e "
+            "Materie Prime (bucket Alternativo) — i bucket Bilanciato/Monetario "
+            "restano vuoti anche se previsti dal profilo."
+        )
+
+    st.markdown("---")
+
+    # ── CARICAMENTO UNIVERSO ETF + ARRICCHIMENTO PERF/VOL ──────────────────
+    with st.spinner("Caricamento universo ETF..."):
+        try:
+            df_etf_pq = _load_etf_universe_cached()
+        except Exception:
+            df_etf_pq = pd.DataFrame()
+        if df_etf_pq.empty or "nome" not in df_etf_pq.columns:
+            from utils.etf_static import get_static_etf_df
+            df_etf_pq = get_static_etf_df()
+        for _nc in ["ter", "perf_1y", "perf_3y", "perf_5y"]:
+            if _nc in df_etf_pq.columns:
+                df_etf_pq[_nc] = pd.to_numeric(df_etf_pq[_nc], errors="coerce")
+
+    _n_missing_perf = int(df_etf_pq["perf_1y"].isna().sum()) if "perf_1y" in df_etf_pq.columns else len(df_etf_pq)
+    _etf_pq_c1, _etf_pq_c2 = st.columns([3, 1])
+    _etf_pq_c1.caption(
+        f"{len(df_etf_pq)} ETF in universo · {len(df_etf_pq) - _n_missing_perf} con rendimenti/volatilità disponibili"
+    )
+    if _etf_pq_c2.button("🔄 Aggiorna rendimenti ETF", use_container_width=True,
+                          disabled=(_n_missing_perf == 0)):
+        _pb_etf = st.progress(0.0, text="Scarico rendimenti/volatilità ETF…")
+        def _etf_pq_progress(v, txt):
+            _pb_etf.progress(min(v, 1.0), text=txt)
+        df_etf_pq = fetch_etf_perf_vol(df_etf_pq, progress_callback=_etf_pq_progress)
+        _pb_etf.empty()
+        _load_etf_universe_cached.clear()
+        try:
+            from utils.etf_fetcher import ETF_UNIVERSE_FILE
+            df_etf_pq.to_excel(ETF_UNIVERSE_FILE, index=False)
+        except Exception:
+            pass
+        st.session_state["_etf_pq_df"] = df_etf_pq
+        st.rerun()
+
+    # Riusa i dati appena arricchiti (sopravvivono al rerun del bottone)
+    if st.session_state.get("_etf_pq_df") is not None:
+        df_etf_pq = st.session_state["_etf_pq_df"]
+
+    if _n_missing_perf > 0:
+        st.info(
+            f"ℹ️ {_n_missing_perf} ETF non hanno ancora rendimenti/volatilità: "
+            "clicca «Aggiorna rendimenti ETF» per recuperarli da yfinance prima "
+            "di costruire il portafoglio (altrimenti quegli ETF vengono scartati)."
+        )
+
+    # ── COSTRUZIONE PORTAFOGLIO ETF ──────────────────────────────────────────
+    with st.spinner("Costruzione portafoglio ETF per Score Qualità..."):
+        portfolio_buckets_etf = build_portfolio_etf(
+            df_etf_pq, profilo=profilo_etf, fondi_per_bucket=fondi_per_bucket_etf
+        )
+
+    BUCKET_COLORS_ETF = {
+        "Azionario":       "#1A2C54",
+        "Obbligazionario": "#2E6DA4",
+        "Bilanciato":      "#5B9BD5",
+        "Monetario":       "#70AD47",
+        "Alternativo":     "#ED7D31",
+    }
+
+    all_etf_rows = []
+    for bucket, df_bucket in portfolio_buckets_etf.items():
+        peso_bucket = alloc_etf_adj.get(bucket, 0)
+        color = BUCKET_COLORS_ETF.get(bucket, NAVY)
+        st.markdown(
+            f"<h3 style='color:{color}'>▣ {bucket} — {peso_bucket}%</h3>",
+            unsafe_allow_html=True,
+        )
+        if df_bucket is None or df_bucket.empty:
+            st.warning(f"Nessun ETF trovato per **{bucket}** (con rendimenti disponibili).")
+            continue
+
+        cols_show_etf = ["isin", "nome", "categoria", "casa", "ter",
+                          "perf_1y", "perf_3y", "volatilita", "score_qualita", "_peso_fondo"]
+        cols_show_etf = [c for c in cols_show_etf if c in df_bucket.columns]
+        display_etf = df_bucket[cols_show_etf].copy()
+        if "nome" in display_etf.columns:
+            display_etf["nome"] = display_etf["nome"].astype(str).str[:55]
+        st.dataframe(display_etf, use_container_width=True, hide_index=True,
+            column_config={
+                "isin": st.column_config.TextColumn("ISIN", width="small"),
+                "nome": st.column_config.TextColumn("ETF", width="large"),
+                "categoria": st.column_config.TextColumn("Categoria"),
+                "casa": st.column_config.TextColumn("Emittente"),
+                "ter": st.column_config.NumberColumn("TER %", format="%.2f"),
+                "perf_1y": st.column_config.NumberColumn("Perf 1Y %", format="%.2f"),
+                "perf_3y": st.column_config.NumberColumn("Perf 3Y %/a", format="%.2f"),
+                "volatilita": st.column_config.NumberColumn("Vol %", format="%.2f"),
+                "score_qualita": st.column_config.ProgressColumn("Score", min_value=0, max_value=20, format="%.2f"),
+                "_peso_fondo": st.column_config.NumberColumn("Peso %", format="%.1f"),
+            })
+
+        if "score_qualita" in df_bucket.columns and len(df_bucket) > 0:
+            _sc_df_e = df_bucket.copy()
+            _sc_df_e["_label"] = _sc_df_e["nome"].astype(str).str[:35]
+            fig_sc_e = px.bar(
+                _sc_df_e.sort_values("score_qualita"),
+                x="score_qualita", y="_label", orientation="h",
+                color="score_qualita",
+                color_continuous_scale=[[0, "#AED6F1"], [1, color]],
+                title=f"Score Qualità — {bucket}",
+                labels={"_label": "", "score_qualita": "Score"},
+            )
+            fig_sc_e.update_layout(height=max(200, len(df_bucket) * 45),
+                                    margin=dict(l=0, r=0, t=35, b=0),
+                                    showlegend=False, coloraxis_showscale=False)
+            st.plotly_chart(fig_sc_e, use_container_width=True)
+
+        for _, r in df_bucket.iterrows():
+            all_etf_rows.append({
+                "Bucket": bucket, "ISIN": r.get("isin", ""),
+                "ETF": str(r.get("nome", ""))[:55],
+                "Categoria": r.get("categoria", ""),
+                "Emittente": r.get("casa", ""),
+                "TER %": r.get("ter"),
+                "Perf 1Y %": r.get("perf_1y"),
+                "Perf 3Y %": r.get("perf_3y"),
+                "Volatilità %": r.get("volatilita"),
+                "Score": r.get("score_qualita"),
+                "Peso %": r.get("_peso_fondo"),
+            })
+
+    if all_etf_rows:
+        st.markdown("---")
+        st.subheader("📋 Portafoglio ETF Completo")
+        df_porto_etf = pd.DataFrame(all_etf_rows)
+
+        pie_ce, tbl_ce = st.columns([1, 2])
+        with pie_ce:
+            bw_e = df_porto_etf.groupby("Bucket")["Peso %"].sum().reset_index()
+            fig_pie_e = px.pie(bw_e, values="Peso %", names="Bucket", hole=0.38,
+                               color_discrete_sequence=list(BUCKET_COLORS_ETF.values()),
+                               title="Allocazione macro")
+            fig_pie_e.update_layout(height=320, margin=dict(l=0, r=0, t=35, b=0))
+            st.plotly_chart(fig_pie_e, use_container_width=True)
+        with tbl_ce:
+            st.dataframe(
+                df_porto_etf[["Bucket", "ETF", "Emittente", "TER %", "Peso %", "Score"]],
+                use_container_width=True, hide_index=True, height=320,
+                column_config={
+                    "TER %": st.column_config.NumberColumn(format="%.2f"),
+                    "Peso %": st.column_config.NumberColumn(format="%.1f"),
+                    "Score": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+        _avg_ter = (df_porto_etf["TER %"] * df_porto_etf["Peso %"]).sum() / df_porto_etf["Peso %"].sum() \
+            if df_porto_etf["Peso %"].sum() else None
+        if _avg_ter is not None:
+            st.caption(f"💰 TER medio ponderato del portafoglio: **{_avg_ter:.2f}%**")
+
+        st.markdown("---")
+        exp_e1, exp_e2 = st.columns(2)
+        weights_etf = {r["ISIN"]: (r["Peso %"] or 0) / 100 for _, r in df_porto_etf.iterrows()}
+        metrics_etf = {"Profilo": profilo_etf, "Totale ETF": len(df_porto_etf),
+                       "TER medio %": round(_avg_ter, 2) if _avg_ter is not None else "—",
+                       "Score medio": f"{df_porto_etf['Score'].mean():.3f}",
+                       "Generato": datetime.now().strftime("%d/%m/%Y %H:%M")}
+        excel_etf = export_portfolio_excel(weights_etf, metrics_etf, fund_df=df_etf_pq,
+                                            title=f"Portafoglio ETF {profilo_etf}")
+        exp_e1.download_button("📥 Esporta Excel", data=excel_etf,
+            file_name=f"portafoglio_etf_{profilo_etf.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        pdf_etf = export_portfolio_pdf(
+            weights_etf, metrics_etf,
+            title=f"Portafoglio ETF — {profilo_etf}",
+            primary_title="Composizione del Portafoglio ETF",
+            fund_df=df_etf_pq,
+            fund_pool={r["ISIN"]: {
+                "nome": r["ETF"], "classificazione": r["Categoria"],
+                "perf_3y": r.get("Perf 3Y %"), "rating_fida": None,
+            } for _, r in df_porto_etf.iterrows()},
+            include_stars=False,
+        )
+        if pdf_etf:
+            exp_e2.download_button("📄 Esporta PDF", data=pdf_etf,
+                file_name=f"portafoglio_etf_{profilo_etf.lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf")
+    else:
+        st.info("Nessun ETF selezionato. Aggiorna i rendimenti ETF e/o rivedi le allocazioni.")
 
 
 # ===========================================================================

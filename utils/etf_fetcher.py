@@ -445,3 +445,71 @@ def load_etf_universe(extra_isins: list[str] | None = None) -> pd.DataFrame:
         return df
     except Exception:
         return _build_from_yfinance_and_static(extra_isins)
+
+
+def fetch_etf_perf_vol(df: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
+    """
+    Arricchisce df con perf_1y/perf_3y/volatilita via yfinance (prezzi mensili,
+    3 anni) per le righe che ne sono prive. Richiede colonna 'ticker' (la
+    aggiunge da ISIN_TO_TICKER se assente). Usato per il Portafoglio ETF,
+    dove serve anche la volatilità (non calcolata da load_etf_universe/
+    fetch_etf_universe, che producono solo perf).
+    """
+    from .etf_tickers import ISIN_TO_TICKER
+
+    df = df.copy()
+    if "ticker" not in df.columns:
+        df["ticker"] = df["isin"].map(ISIN_TO_TICKER)
+    for _c in ("perf_1y", "perf_3y", "volatilita"):
+        if _c not in df.columns:
+            df[_c] = None
+        df[_c] = pd.to_numeric(df[_c], errors="coerce")
+
+    _need_mask = df["perf_1y"].isna() & df["ticker"].notna()
+    _tickers = df.loc[_need_mask, "ticker"].dropna().unique().tolist()
+    if not _tickers:
+        return df
+
+    try:
+        import yfinance as yf
+    except ImportError:
+        return df
+
+    BATCH = 15
+    for i in range(0, len(_tickers), BATCH):
+        batch = _tickers[i:i + BATCH]
+        if progress_callback:
+            progress_callback(i / max(1, len(_tickers)),
+                               f"Rendimenti/volatilità ETF {i}/{len(_tickers)}…")
+        try:
+            hist = yf.download(" ".join(batch), period="3y", interval="1mo",
+                               auto_adjust=True, progress=False)
+            if hist.empty:
+                continue
+            if isinstance(hist.columns, pd.MultiIndex):
+                if "Close" not in hist.columns.get_level_values(0):
+                    continue
+                close = hist["Close"]
+            else:
+                close = hist[["Close"]].rename(columns={"Close": batch[0]}) if "Close" in hist.columns else None
+                if close is None:
+                    continue
+            for tk in batch:
+                if tk not in close.columns:
+                    continue
+                s = close[tk].dropna()
+                if len(s) < 12:
+                    continue
+                p1 = (s.iloc[-1] / s.iloc[-13] - 1) * 100 if len(s) >= 13 else None
+                p3 = (s.iloc[-1] / s.iloc[-37] - 1) * 100 / 3 if len(s) >= 37 else None
+                vol = float(s.pct_change().dropna().std() * (12 ** 0.5) * 100)
+                idx = df[df["ticker"] == tk].index
+                if len(idx):
+                    if p1 is not None: df.loc[idx, "perf_1y"] = round(p1, 2)
+                    if p3 is not None: df.loc[idx, "perf_3y"] = round(p3, 2)
+                    df.loc[idx, "volatilita"] = round(vol, 2)
+        except Exception:
+            continue
+    if progress_callback:
+        progress_callback(1.0, "Completato")
+    return df
