@@ -3490,10 +3490,15 @@ elif nav == "🔀 Comparatore":
                     fill="toself", name=pname, opacity=0.7,
                 ))
             fig_rad.update_layout(
-                polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
+                # fixedrange: i valori sono già normalizzati 0-10, lo zoom
+                # drag non serve e "incastrava" il grafico zoomato senza un
+                # modo ovvio per tornare indietro.
+                polar=dict(radialaxis=dict(visible=True, range=[0, 10], fixedrange=True),
+                           angularaxis=dict(fixedrange=True)),
                 showlegend=True, height=380,
             )
-            st.plotly_chart(fig_rad, use_container_width=True)
+            st.plotly_chart(fig_rad, use_container_width=True,
+                             config={"scrollZoom": False, "displayModeBar": False})
 
         # ── EXPORT COMPARATORE ────────────────────────────────────────────
         st.markdown("---")
