@@ -299,7 +299,31 @@ def load_fondi_terzi(path=None) -> pd.DataFrame:
     is_filelike = hasattr(path, "read") or isinstance(path, (bytes, io.BytesIO))
     if not is_filelike and not os.path.exists(path):
         return _demo_fondi_terzi()
-    df = pd.read_excel(path, sheet_name="tutti quelli trasferibili", dtype=object)
+    import io as _io
+    if hasattr(path, "read"):
+        path = _io.BytesIO(path.read())
+    elif isinstance(path, bytes):
+        path = _io.BytesIO(path)
+
+    # Auto-rileva la riga header: alcuni file hanno una riga di titolo/data
+    # sopra la vera intestazione (es. "Dati di performance aggiornati al...")
+    _header_row = 0
+    try:
+        _df_peek = pd.read_excel(path, sheet_name="tutti quelli trasferibili",
+                                  header=None, nrows=10, dtype=object)
+        for _i, _row in _df_peek.iterrows():
+            _vals = [str(v).strip().upper() for v in _row if pd.notna(v) and str(v).strip()]
+            if any("ISIN" in v for v in _vals) or any("FONDO" in v for v in _vals):
+                _header_row = int(_i)
+                break
+        if isinstance(path, _io.BytesIO):
+            path.seek(0)
+    except Exception:
+        _header_row = 0
+        if isinstance(path, _io.BytesIO):
+            path.seek(0)
+
+    df = pd.read_excel(path, sheet_name="tutti quelli trasferibili", header=_header_row, dtype=object)
     df.columns = [str(c).strip() for c in df.columns]
     df = _sanitize_df(df)
 
