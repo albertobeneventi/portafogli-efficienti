@@ -1161,10 +1161,18 @@ elif nav == "📈 Frontiera Efficiente":
                                        disabled=(int(_pct_mp)==0))
         _n_bi_str = 0   # bilanciato rimosso
         _sf1, _sf2, _sf3 = st.columns(3)
+        _solo_azimut_fe = _sf1.checkbox(
+            "🔵 Tutti fondi Azimut (dove disponibili)",
+            value=_prev.get("solo_azimut", False), key="fe_solo_azimut",
+            help="Riempie tutti gli slot possibili con fondi Azimut (i migliori per "
+                 "Score Qualità), nel limite di quanti disponibili per ciascun bucket. "
+                 "Gli slot senza un fondo Azimut adeguato restano coperti dai fondi terzi/ETF.",
+        )
         _az_label = f"Min fondi Azimut  ({_n_az_avail} disponibili)" if _n_az_avail else "Min fondi Azimut"
         _n_min_az = _sf1.number_input(_az_label, 0, max(_n_az_avail, 20),
                                        _prev.get("n_min_az", 0), 1,
-                                       help="I migliori per Score Qualita' vengono inclusi automaticamente")
+                                       help="I migliori per Score Qualita' vengono inclusi automaticamente",
+                                       disabled=_solo_azimut_fe)
         _use_fondi  = _sf2.checkbox("Fondi prima degli ETF", value=_prev.get("use_fondi", True),
                                     help="I fondi caricati dall'Excel vengono selezionati prima degli ETF. "
                                          "Disattiva per un mix paritetico fondi/ETF.")
@@ -1469,7 +1477,7 @@ elif nav == "📈 Frontiera Efficiente":
         st.session_state["_fe_form_vals"] = {
             "pct_az": int(_pct_az), "pct_ob": int(_pct_ob), "pct_mp": int(_pct_mp),
             "n_az_str": int(_n_az_str), "n_ob_str": int(_n_ob_str), "n_mp_str": int(_n_mp_str),
-            "n_min_az": int(_n_min_az),
+            "n_min_az": int(_n_min_az), "solo_azimut": bool(_solo_azimut_fe),
             "use_fondi": bool(_use_fondi), "use_etf": bool(_use_etf),
             "use_azioni": bool(_use_azioni),
             "min_w_pct": int(_min_w_pct), "max_w_pct": int(_max_w_pct),
@@ -1488,7 +1496,11 @@ elif nav == "📈 Frontiera Efficiente":
                 _it = [i for i in ITALIAN_STOCKS if not i.startswith("IT_BTP")][:4]
                 _az_sel = list(dict.fromkeys(_az_sel + _it))
             _all_sel = list(dict.fromkeys(_az_sel + _ob_sel + _bi_sel + _mp_sel))
-            _n_min_az_int = int(_n_min_az)
+            # "Tutti Azimut": richiede tanti slot Azimut quanti gli strumenti
+            # totali selezionati — _inject_azimut si ferma comunque appena il
+            # pool Azimut disponibile per bucket si esaurisce, quindi non
+            # forza nulla se non ci sono abbastanza fondi Azimut adeguati.
+            _n_min_az_int = len(_all_sel) if _solo_azimut_fe else int(_n_min_az)
             _all_sel, _az_forced = _inject_azimut(
                 _all_sel, _n_min_az_int, az_sel=_az_sel, ob_sel=_ob_sel
             )
