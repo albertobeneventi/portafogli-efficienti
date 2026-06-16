@@ -3046,6 +3046,7 @@ elif nav == "⭐ Portafoglio Qualità":
         pdf_q = export_portfolio_pdf(
             weights_q, metrics_q,
             title=f"Portafoglio Qualità — {profilo}",
+            primary_title="Composizione del Portafoglio",
             fund_df=df_unified if not df_unified.empty else None,
             fund_pool={r["ISIN"]: {
                 "nome": r["Fondo"], "classificazione": r["Classificazione"],

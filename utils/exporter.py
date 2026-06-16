@@ -353,6 +353,7 @@ def export_portfolio_pdf(
     weights_bl: Optional[dict] = None,
     metrics_bl: Optional[dict] = None,
     bl_views: Optional[dict] = None,
+    primary_title: str = "Portafoglio Max Sharpe",
 ) -> bytes:
     """
     Genera PDF con:
@@ -383,15 +384,22 @@ def export_portfolio_pdf(
         fn = kw.pop("fontName", _FONT_NAME)
         return ParagraphStyle(name, parent=styles["Normal"], fontName=fn, **kw)
 
-    title_style   = _p("T",  fontSize=20, textColor=NAVY_RL, spaceAfter=4)
-    sub_style     = _p("S",  fontSize=9,  textColor=colors.HexColor("#666666"), spaceAfter=10)
-    h1_style      = _p("H1", fontSize=14, textColor=NAVY_RL, spaceBefore=16, spaceAfter=6,
+    # NB: ParagraphStyle eredita leading=12 da styles["Normal"] se non specificato
+    # esplicitamente. Con fontSize > 12 questo causa sovrapposizione tra le righe
+    # (es. titolo a 20pt con leading 12pt si sovrappone al paragrafo successivo).
+    # Ogni stile qui sotto imposta leading ≈ 1.25x fontSize.
+    title_style   = _p("T",  fontSize=20, leading=25, textColor=NAVY_RL, spaceAfter=4)
+    sub_style     = _p("S",  fontSize=9,  leading=12, textColor=colors.HexColor("#666666"), spaceAfter=10)
+    h1_style      = _p("H1", fontSize=14, leading=18, textColor=NAVY_RL, spaceBefore=16, spaceAfter=6,
                         fontName=_FONT_BOLD)
-    h2_style      = _p("H2", fontSize=11, textColor=NAVY_RL, spaceBefore=10, spaceAfter=4,
+    h2_style      = _p("H2", fontSize=11, leading=14, textColor=NAVY_RL, spaceBefore=10, spaceAfter=4,
                         fontName=_FONT_BOLD)
-    small         = _p("Sm", fontSize=8,  textColor=colors.HexColor("#555555"), spaceAfter=3)
-    note_style    = _p("N",  fontSize=8,  textColor=colors.HexColor("#888888"),
+    small         = _p("Sm", fontSize=8,  leading=10, textColor=colors.HexColor("#555555"), spaceAfter=3)
+    note_style    = _p("N",  fontSize=8,  leading=10, textColor=colors.HexColor("#888888"),
                         leftIndent=10, spaceAfter=6)
+    cell_style    = _p("Cell", fontSize=8, leading=9.5, wordWrap="CJK")
+    cell_h_style  = _p("CellH", fontSize=8.5, leading=10, textColor=colors.white,
+                        fontName=_FONT_BOLD, wordWrap="CJK")
 
     story = []
 
@@ -490,20 +498,25 @@ def export_portfolio_pdf(
             hdr   = ["ISIN", "Nome / Fondo", "Asset Class", "Peso %", "Perf 3Y %"]
             col_w = [2.8 * cm, 11.9 * cm, 7.0 * cm, 2.0 * cm, 2.4 * cm]
 
-        w_data = [hdr]
+        # Header e celle "Nome/Fondo"/"Asset Class" come Paragraph: il testo va
+        # a capo dentro la colonna invece di sforare nella colonna successiva
+        # (causa delle sovrapposizioni quando il nome del fondo è lungo).
+        w_data = [[Paragraph(_safe_str(h), cell_h_style) for h in hdr]]
         for isin, w in sorted(w_dict.items(), key=lambda x: -x[1]):
             if w <= 0:
                 continue
             info  = _info_map.get(isin, {})
-            nome  = _safe_str(str(info.get("nome", info.get("FONDO AZIMUT", isin)))[:55])
-            cl    = _safe_str(str(info.get("classificazione", info.get("categoria", "-")))[:32])
+            nome  = _safe_str(str(info.get("nome", info.get("FONDO AZIMUT", isin))))
+            cl    = _safe_str(str(info.get("classificazione", info.get("categoria", "-"))))
             perf  = info.get("perf_3y")
             p_str = f"{float(perf):.1f}%" if perf is not None else "-"
+            nome_p = Paragraph(nome, cell_style)
+            cl_p   = Paragraph(cl, cell_style)
             if has_stars:
-                w_data.append([isin, nome, cl, f"{w * 100:.1f}%",
+                w_data.append([isin, nome_p, cl_p, f"{w * 100:.1f}%",
                                 _stars(info.get("rating_fida")), p_str])
             else:
-                w_data.append([isin, nome, cl, f"{w * 100:.1f}%", p_str])
+                w_data.append([isin, nome_p, cl_p, f"{w * 100:.1f}%", p_str])
 
         _ts = [
             ("BACKGROUND",    (0, 0), (-1, 0), NAVY_RL),
@@ -511,6 +524,7 @@ def export_portfolio_pdf(
             ("FONTNAME",      (0, 0), (-1, -1), _FONT_NAME),
             ("FONTNAME",      (0, 0), (-1, 0),  _FONT_BOLD),
             ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, GRAY_LIGHT]),
             ("GRID",          (0, 0), (-1, -1), 0.35, GRAY_MID),
             ("LEFTPADDING",   (0, 0), (-1, -1), 5),
@@ -527,13 +541,21 @@ def export_portfolio_pdf(
             story.append(Paragraph(legend, small))
         story.append(Spacer(1, 0.5 * cm))
 
-    # ── 1. Max Sharpe ─────────────────────────────────────────────────────
+    # ── 1. Sezione principale (Max Sharpe nel report Frontiera Efficiente,
+    #      oppure il portafoglio passato per export singoli es. Qualità) ─────
+    _primary_note = (
+        "Massimizza il rapporto rendimento/rischio (Indice di Sharpe)."
+        if primary_title == "Portafoglio Max Sharpe" else ""
+    )
     _portfolio_section(
-        h_title="Portafoglio Max Sharpe",
+        h_title=primary_title,
         h_color=NAVY_RL,
         w_dict=weights,
         m_dict=metrics,
-        note="Massimizza il rapporto rendimento/rischio (Indice di Sharpe).",
+        note=_primary_note,
+        # Se non c'è già un grafico in pagina 1, la prima sezione resta sulla
+        # stessa pagina dell'intestazione (evita una pagina quasi vuota).
+        new_page=bool(chart_bytes),
     )
 
     # ── 2. Min Volatilità ─────────────────────────────────────────────────
