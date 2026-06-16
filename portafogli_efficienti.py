@@ -1570,7 +1570,14 @@ elif nav == "📈 Frontiera Efficiente":
             ] if v > 0
         }
         sel_isins          = _all_sel
-        forced_include_sel = _az_forced
+        # Unisce i preferiti da file view di mercato con i fondi Azimut forzati
+        # (prima sovrascriveva _mv_forced_base, perdendo i preferiti ogni volta
+        # che girava l'iniezione Azimut, anche con n_min_az=0).
+        forced_include_sel = list(dict.fromkeys(_mv_forced_base + _az_forced))
+        # Sottoinsieme che la modalità "Tutti/Min fondi Azimut" può rilassare
+        # se il vincolo di peso minimo forzato rende l'ottimizzazione infeasible
+        # (i preferiti da file view NON vengono mai rilassati).
+        _az_forced_relaxable = list(_az_forced)
         run                = True
 
         if sel_isins:
@@ -1736,13 +1743,43 @@ elif nav == "📈 Frontiera Efficiente":
                                 "upper": {k: min(1, v + 0.10) for k, v in ac_target.items()},
                             }
 
-                    result = compute_efficient_frontier(
-                        price_dict, weight_bounds=(min_w, max_w),
-                        risk_free_rate=rfr,
-                        forced_include=forced_include_sel or None,
-                        sector_constraints=sector_constraints,
-                        assets_info=_all_fund_pool,
-                        selected_isins=sel_isins,
+                    # Tenta l'ottimizzazione; se infeasible per il peso minimo
+                    # forzato sui fondi Azimut (tipico con "Tutti/Min fondi
+                    # Azimut" + vincoli di settore stretti), rilassa il fondo
+                    # Azimut forzato con score più basso e riprova, finché non
+                    # diventa feasible o non restano più fondi Azimut da
+                    # rilassare — così si ottiene il numero massimo di fondi
+                    # Azimut a peso minimo garantito compatibile con i vincoli,
+                    # invece di un errore secco.
+                    _forced_try = list(forced_include_sel)
+                    _az_relax_pool = sorted(
+                        _az_forced_relaxable,
+                        key=lambda i: _all_fund_pool.get(i, {}).get("score_qualita", 0) or 0,
+                    )  # ascendente: il primo è il più debole, va rilassato per primo
+                    _n_az_relaxed = 0
+                    while True:
+                        result = compute_efficient_frontier(
+                            price_dict, weight_bounds=(min_w, max_w),
+                            risk_free_rate=rfr,
+                            forced_include=_forced_try or None,
+                            sector_constraints=sector_constraints,
+                            assets_info=_all_fund_pool,
+                            selected_isins=sel_isins,
+                        )
+                        if "error" not in result or _n_az_relaxed >= len(_az_relax_pool):
+                            break
+                        _weakest = _az_relax_pool[_n_az_relaxed]
+                        if _weakest in _forced_try:
+                            _forced_try.remove(_weakest)
+                        _n_az_relaxed += 1
+                    forced_include_sel = _forced_try
+                if _n_az_relaxed > 0 and "error" not in result:
+                    st.info(
+                        f"ℹ️ Vincolo \"Tutti/Min fondi Azimut\" non interamente compatibile con i "
+                        f"vincoli di settore: trovato un portafoglio fattibile garantendo il peso "
+                        f"minimo a {len(_az_forced_relaxable) - _n_az_relaxed}/{len(_az_forced_relaxable)} "
+                        f"fondi Azimut (gli altri restano comunque selezionabili dall'ottimizzatore, "
+                        f"senza un peso minimo garantito)."
                     )
                 if "error" in result:
                     st.error(f"Errore ottimizzazione: {result['error']}")
