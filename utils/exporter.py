@@ -553,9 +553,10 @@ def export_portfolio_pdf(
         w_dict=weights,
         m_dict=metrics,
         note=_primary_note,
-        # Se non c'è già un grafico in pagina 1, la prima sezione resta sulla
-        # stessa pagina dell'intestazione (evita una pagina quasi vuota).
-        new_page=bool(chart_bytes),
+        # La prima sezione resta sempre sulla stessa pagina dell'intestazione
+        # (ed eventuale grafico): mai una pagina 1 con solo titolo, anche se
+        # il grafico non viene generato (es. kaleido non disponibile).
+        new_page=False,
     )
 
     # ── 2. Min Volatilità ─────────────────────────────────────────────────
