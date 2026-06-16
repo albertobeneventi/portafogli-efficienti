@@ -945,10 +945,21 @@ elif nav == "📈 Frontiera Efficiente":
 
     def _inject_azimut(selected: list, n_min: int,
                        az_sel: list | None = None,
-                       ob_sel: list | None = None) -> tuple:
+                       ob_sel: list | None = None,
+                       cross_macro: bool = True) -> tuple:
         """
         Sostituisce n_min fondi terzi con fondi Azimut (il totale NON aumenta).
         Deduplicazione per nome fondo (classi diverse dello stesso fondo → prende la migliore).
+
+        cross_macro=True (default, usato da "Min fondi Azimut" con N piccolo):
+        se il pool Azimut Obbligazioni non basta, compensa con più Azioni Azimut.
+        cross_macro=False (usato da "Tutti fondi Azimut"): nessuna compensazione
+        tra macro — ogni bucket viene sostituito solo nei limiti del proprio pool
+        Azimut. Con n_min grande, la compensazione cross-macro può azzerare
+        interamente un bucket (es. tutte le Obbligazioni sostituite con Azioni
+        Azimut), rendendo infeasible il vincolo settoriale lower-bound che
+        richiede una quota minima per quel macro (somma pesi di zero asset non
+        può raggiungere un minimo > 0).
         """
         if n_min <= 0:
             return selected, []
@@ -1061,19 +1072,28 @@ elif nav == "📈 Frontiera Efficiente":
         _az_avail_az = sum(1 for e in _az_pool if e["_macro"] == "Azioni" and e["isin"] not in _result)
         _az_avail_ob = sum(1 for e in _az_pool if e["_macro"] == "Obbligazioni" and e["isin"] not in _result)
 
-        # Ridistribuisce le quote se Azimut non ha abbastanza fondi in un bucket:
-        # i "mancanti" obbligazionari vengono compensati con più azioni Azimut
-        # (sostituendo posti AZIONI, non obbligazioni → le obbligazioni restano intatte)
-        _real_ob_add = min(_n_ob_to_add, _az_avail_ob)
-        _real_az_add = min(_n_az_to_add + (_n_ob_to_add - _real_ob_add), _az_avail_az)
+        if cross_macro:
+            # Ridistribuisce le quote se Azimut non ha abbastanza fondi in un bucket:
+            # i "mancanti" obbligazionari vengono compensati con più azioni Azimut
+            # (sostituendo posti AZIONI, non obbligazioni → le obbligazioni restano intatte)
+            _real_ob_add = min(_n_ob_to_add, _az_avail_ob)
+            _real_az_add = min(_n_az_to_add + (_n_ob_to_add - _real_ob_add), _az_avail_az)
+        else:
+            # Nessuna compensazione cross-macro: ogni bucket resta nei limiti
+            # del proprio pool, preservando lo split Azioni/Obbligazioni
+            # richiesto dai vincoli settoriali.
+            _real_ob_add = min(_n_ob_to_add, _az_avail_ob)
+            _real_az_add = min(_n_az_to_add, _az_avail_az)
 
         _added  = _replace_with_azimut(az_sel, _real_az_add, "Azioni")
         _added += _replace_with_azimut(ob_sel, _real_ob_add, "Obbligazioni")
 
         # Quota residua (Azimut di qualsiasi macro → sostituisce SOLO posti azioni,
-        # per non toccare le obbligazioni selezionate)
+        # per non toccare le obbligazioni selezionate). Solo in modalità
+        # cross_macro: altrimenti si ricadrebbe nello stesso sbilanciamento
+        # che cross_macro=False vuole evitare.
         _still_need = _need - _added
-        if _still_need > 0:
+        if cross_macro and _still_need > 0:
             _az_replaceable = [i for i in (az_sel or [])
                                if i in _result and i not in _az_isins and i not in _forced]
             if not _az_replaceable:  # nessun posto azioni disponibile → prende qualsiasi
@@ -1502,7 +1522,8 @@ elif nav == "📈 Frontiera Efficiente":
             # forza nulla se non ci sono abbastanza fondi Azimut adeguati.
             _n_min_az_int = len(_all_sel) if _solo_azimut_fe else int(_n_min_az)
             _all_sel, _az_forced = _inject_azimut(
-                _all_sel, _n_min_az_int, az_sel=_az_sel, ob_sel=_ob_sel
+                _all_sel, _n_min_az_int, az_sel=_az_sel, ob_sel=_ob_sel,
+                cross_macro=not _solo_azimut_fe,
             )
 
         # Debug Azimut (solo se richiesto)
