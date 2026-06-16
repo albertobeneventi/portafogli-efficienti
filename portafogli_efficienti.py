@@ -3560,12 +3560,12 @@ elif nav == "🔀 Comparatore":
                     fill="toself", name=pname, opacity=0.7,
                 ))
             fig_rad.update_layout(
-                # fixedrange: i valori sono già normalizzati 0-10, lo zoom
-                # drag non serve e "incastrava" il grafico zoomato senza un
-                # modo ovvio per tornare indietro.
-                polar=dict(radialaxis=dict(visible=True, range=[0, 10], fixedrange=True),
-                           angularaxis=dict(fixedrange=True)),
+                polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
                 showlegend=True, height=380,
+                dragmode=False,  # niente zoom via drag (i valori sono già
+                                 # normalizzati 0-10, non serve); "fixedrange"
+                                 # non è valido sugli assi polari in Plotly,
+                                 # a differenza di quelli cartesiani.
             )
             st.plotly_chart(fig_rad, use_container_width=True,
                              config={"scrollZoom": False, "displayModeBar": False})
