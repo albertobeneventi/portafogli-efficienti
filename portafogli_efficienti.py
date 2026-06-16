@@ -3289,8 +3289,8 @@ elif nav == "🪙 Portafoglio ETF":
 elif nav == "🔀 Comparatore":
     st.title("🔀 Comparatore Portafogli")
     st.markdown(
-        "Confronta fianco a fianco Max Sharpe, Min Varianza, Portafoglio Qualità "
-        "e un portafoglio personalizzato."
+        "Confronta fianco a fianco Max Sharpe, Min Varianza, Portafoglio Qualità, "
+        "Portafoglio ETF e un portafoglio personalizzato."
     )
 
     # Raccoglie portafogli disponibili
@@ -3343,6 +3343,65 @@ elif nav == "🔀 Comparatore":
         except Exception:
             pass
 
+    # Portafoglio ETF — costruito al volo con gli stessi criteri di Qualità,
+    # sull'universo ETF (Lista C)
+    try:
+        df_etf_comp = _load_etf_universe_cached()
+    except Exception:
+        df_etf_comp = pd.DataFrame()
+    if df_etf_comp.empty or "nome" not in df_etf_comp.columns:
+        from utils.etf_static import get_static_etf_df
+        df_etf_comp = get_static_etf_df()
+    for _nc in ["ter", "perf_1y", "perf_3y", "perf_5y"]:
+        if _nc in df_etf_comp.columns:
+            df_etf_comp[_nc] = pd.to_numeric(df_etf_comp[_nc], errors="coerce")
+    # Riusa l'universo già arricchito (perf/vol via yfinance) se l'utente
+    # l'ha già aggiornato nella pagina Portafoglio ETF in questa sessione.
+    if st.session_state.get("_etf_pq_df") is not None:
+        df_etf_comp = st.session_state["_etf_pq_df"]
+
+    if not df_etf_comp.empty:
+        try:
+            _etf_buckets = build_portfolio_etf(
+                df_etf_comp, profilo=st.session_state.get("profilo", "Equilibrato"),
+                fondi_per_bucket=st.session_state.get("etf_fondi_per_bucket", 4),
+                max_per_casa=st.session_state.get("etf_max_per_casa", 4),
+            )
+            _etf_weights = {}
+            for _bk, _bdf in _etf_buckets.items():
+                if _bdf is not None and not _bdf.empty:
+                    for _, _r in _bdf.iterrows():
+                        _etf_weights[_r.get("isin", "")] = (_r.get("_peso_fondo", 0) or 0) / 100
+            if _etf_weights:
+                _etf_ret = _etf_vol = _etf_sharpe = None
+                try:
+                    from utils.optimizer import build_hybrid_mu_sigma
+                    _etf_info = {}
+                    for isin in _etf_weights:
+                        _row = df_etf_comp.loc[df_etf_comp["isin"] == isin]
+                        if not _row.empty:
+                            _d = _row.iloc[0].to_dict()
+                            _d["classificazione"] = _d.get("categoria")
+                            _etf_info[isin] = _d
+                    _rfr_etf = st.session_state.get("risk_free_rate", 2.5) / 100
+                    _etf_mu, _etf_cov = build_hybrid_mu_sigma(_etf_info, {}, risk_free_rate=_rfr_etf)
+                    _etf_isins_ok = [i for i in _etf_weights if i in _etf_mu.index]
+                    if _etf_isins_ok:
+                        _w_etf = pd.Series({i: _etf_weights[i] for i in _etf_isins_ok})
+                        _w_etf = _w_etf / _w_etf.sum()
+                        _etf_ret = float((_w_etf * _etf_mu[_etf_isins_ok]).sum())
+                        _etf_vol = float(np.sqrt(
+                            _w_etf.values @ _etf_cov.loc[_etf_isins_ok, _etf_isins_ok].values @ _w_etf.values
+                        ))
+                        _etf_sharpe = (_etf_ret - _rfr_etf) / _etf_vol if _etf_vol > 0 else None
+                except Exception:
+                    pass
+                _comp_portfolios["ETF"] = {
+                    "weights": _etf_weights, "ret": _etf_ret, "vol": _etf_vol, "sharpe": _etf_sharpe,
+                }
+        except Exception:
+            pass
+
     if not _comp_portfolios:
         st.info(
             "Nessun portafoglio calcolato ancora. "
@@ -3365,12 +3424,13 @@ elif nav == "🔀 Comparatore":
                 "N. asset":            n_assets,
             })
         st.dataframe(pd.DataFrame(metrics_rows), use_container_width=True, hide_index=True)
-        if "Qualità" in _comp_portfolios:
+        if "Qualità" in _comp_portfolios or "ETF" in _comp_portfolios:
             st.caption(
-                "ℹ️ Rendimento/Volatilità/Sharpe di **Qualità** sono stimati con lo stesso "
-                "metodo ibrido di Frontiera Efficiente (μ da prior di categoria forward-looking, "
-                "non dalla performance storica dei fondi): coerenti per il confronto con gli "
-                "altri portafogli, ma non un backtest né un rendimento garantito."
+                "ℹ️ Rendimento/Volatilità/Sharpe di **Qualità** e **ETF** sono stimati con lo "
+                "stesso metodo ibrido di Frontiera Efficiente (μ da prior di categoria "
+                "forward-looking, non dalla performance storica dei singoli strumenti): "
+                "coerenti per il confronto con gli altri portafogli, ma non un backtest "
+                "né un rendimento garantito."
             )
 
         # ── PESI AFFIANCATI ──────────────────────────────────────────────
