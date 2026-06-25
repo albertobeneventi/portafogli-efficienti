@@ -39,7 +39,7 @@ from utils.etf_fetcher import (
 from utils.nav_fetcher import get_multiple_nav, get_nav_series
 from utils.optimizer import (
     compute_efficient_frontier, compute_black_litterman,
-    estimate_max_drawdown, compute_bl_auto_views,
+    estimate_max_drawdown, compute_bl_auto_views, build_hybrid_mu_sigma,
 )
 from utils.exporter import (
     export_portfolio_excel, export_portfolio_pdf,
@@ -253,6 +253,69 @@ def _pct_fmt(val) -> str:
     if val is None or (isinstance(val, float) and np.isnan(val)):
         return "—"
     return f"{val:+.2f}%"
+
+
+def _ibbotson_cone_fig(
+    portfolios: list[dict],   # [{"label": str, "mu": float, "sigma": float, "color": str}]
+    orizzonte: int,
+    capitale: float,
+    rfr: float = 0.03,
+) -> go.Figure:
+    """Cono di Ibbotson: proiezione log-normale su orizzonte temporale.
+
+    Per ogni portafoglio traccia:
+    - banda ±2σ (alpha 0.10)
+    - banda ±1σ (alpha 0.20)
+    - percorso mediano (linea continua)
+    Usa la distribuzione log-normale: μ_log = μ - σ²/2.
+    """
+    t_arr = np.linspace(0, orizzonte, orizzonte * 12 + 1)
+    fig = go.Figure()
+
+    for p in portfolios:
+        mu, sigma, label, color = p["mu"], p["sigma"], p["label"], p["color"]
+        mu_log = mu - 0.5 * sigma ** 2
+        median  = capitale * np.exp(mu_log * t_arr)
+        up1     = capitale * np.exp((mu_log + sigma) * t_arr)
+        down1   = capitale * np.exp((mu_log - sigma) * t_arr)
+        up2     = capitale * np.exp((mu_log + 2 * sigma) * t_arr)
+        down2   = capitale * np.exp((mu_log - 2 * sigma) * t_arr)
+
+        # Banda ±2σ
+        fig.add_trace(go.Scatter(
+            x=np.concatenate([t_arr, t_arr[::-1]]),
+            y=np.concatenate([up2, down2[::-1]]),
+            fill="toself", fillcolor=color, opacity=0.08,
+            line=dict(width=0), showlegend=False, hoverinfo="skip",
+        ))
+        # Banda ±1σ
+        fig.add_trace(go.Scatter(
+            x=np.concatenate([t_arr, t_arr[::-1]]),
+            y=np.concatenate([up1, down1[::-1]]),
+            fill="toself", fillcolor=color, opacity=0.18,
+            line=dict(width=0), showlegend=False, hoverinfo="skip",
+        ))
+        # Percorso mediano
+        fig.add_trace(go.Scatter(
+            x=t_arr, y=median,
+            mode="lines", name=label,
+            line=dict(color=color, width=2.5),
+            hovertemplate=f"<b>{label}</b><br>Anno: %{{x:.1f}}<br>Valore mediano: €%{{y:,.0f}}<extra></extra>",
+        ))
+
+    # Linea capitale iniziale (orizzontale tratteggiata)
+    fig.add_hline(y=capitale, line_dash="dot", line_color="gray", opacity=0.5)
+
+    fig.update_layout(
+        xaxis_title="Anni",
+        yaxis_title="Valore portafoglio (€)",
+        yaxis_tickformat=",.0f",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=400,
+        margin=dict(l=10, r=10, t=30, b=10),
+        hovermode="x unified",
+    )
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -3122,6 +3185,60 @@ elif nav == "⭐ Portafoglio Qualità":
                 file_name=f"portafoglio_qualita_{profilo.lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
                 mime="application/pdf")
 
+        # ── CONO DI IBBOTSON ──────────────────────────────────────────────
+        st.markdown("---")
+        with st.expander("📐 Cono di Ibbotson — proiezione futura del portafoglio", expanded=False):
+            st.caption(
+                "Proiezione log-normale del valore del portafoglio nel tempo. "
+                "La linea centrale è la mediana; le bande indicano i percentili "
+                "16°–84° (±1σ) e 2.5°–97.5° (±2σ). Non è un backtest né un rendimento garantito."
+            )
+            _ib_c1, _ib_c2 = st.columns([1, 3])
+            _ib_capitale_q = _ib_c1.number_input(
+                "Capitale iniziale (€)", min_value=1_000, max_value=10_000_000,
+                value=100_000, step=10_000, key="ib_capitale_q",
+            )
+            _ib_orizzonte_q = _ib_c1.slider(
+                "Orizzonte (anni)", 1, 30, 10, key="ib_orizzonte_q",
+            )
+            # Stima μ/σ del portafoglio Qualità con build_hybrid_mu_sigma
+            try:
+                _ib_info_q = {
+                    row["ISIN"]: {
+                        "classificazione": row.get("Classificazione", ""),
+                        "perf_3y": row.get("Perf 3Y %"),
+                        "perf_1y": row.get("Perf 1Y %"),
+                    }
+                    for _, row in df_porto.iterrows()
+                    if row.get("ISIN")
+                }
+                _ib_w_q = {row["ISIN"]: (row.get("Peso %") or 0) / 100
+                           for _, row in df_porto.iterrows() if row.get("ISIN")}
+                _ib_mu_q, _ib_cov_q = build_hybrid_mu_sigma(_ib_info_q, {}, risk_free_rate=0.03)
+                _ib_isins_ok_q = [i for i in _ib_w_q if i in _ib_mu_q.index]
+                if _ib_isins_ok_q:
+                    _ib_ws_q = pd.Series({i: _ib_w_q[i] for i in _ib_isins_ok_q})
+                    _ib_mu_port_q = float((_ib_ws_q * _ib_mu_q[_ib_isins_ok_q]).sum())
+                    _ib_sigma_port_q = float(np.sqrt(
+                        _ib_ws_q.values @ _ib_cov_q.loc[_ib_isins_ok_q, _ib_isins_ok_q].values @ _ib_ws_q.values
+                    ))
+                    _ib_fig_q = _ibbotson_cone_fig(
+                        [{"label": f"Qualità {profilo}", "mu": _ib_mu_port_q,
+                          "sigma": _ib_sigma_port_q, "color": "#1A73E8"}],
+                        orizzonte=_ib_orizzonte_q,
+                        capitale=float(_ib_capitale_q),
+                    )
+                    _ib_c2.plotly_chart(_ib_fig_q, use_container_width=True,
+                                        config={"displayModeBar": False})
+                    _ib_c1.metric("Rendimento atteso (μ)", f"{_ib_mu_port_q*100:.2f}%")
+                    _ib_c1.metric("Volatilità (σ)", f"{_ib_sigma_port_q*100:.2f}%")
+                    _ib_c1.metric("Sharpe stimato",
+                                  f"{(_ib_mu_port_q - 0.03) / _ib_sigma_port_q:.2f}")
+                else:
+                    st.info("Dati insufficienti per la proiezione.")
+            except Exception as _ib_e:
+                st.warning(f"Proiezione non disponibile: {_ib_e}")
+
 
 # ===========================================================================
 # PORTAFOGLIO ETF — stessi criteri del Portafoglio Qualità, solo ETF
@@ -3349,6 +3466,59 @@ elif nav == "🪙 Portafoglio ETF":
             exp_e2.download_button("📄 Esporta PDF", data=pdf_etf,
                 file_name=f"portafoglio_etf_{profilo_etf.lower()}_{datetime.now().strftime('%Y%m%d')}.pdf",
                 mime="application/pdf")
+
+        # ── CONO DI IBBOTSON ──────────────────────────────────────────────
+        st.markdown("---")
+        with st.expander("📐 Cono di Ibbotson — proiezione futura del portafoglio ETF", expanded=False):
+            st.caption(
+                "Proiezione log-normale del valore del portafoglio nel tempo. "
+                "Bande ±1σ (16°–84° percentile) e ±2σ (2.5°–97.5°). "
+                "Non è un backtest né un rendimento garantito."
+            )
+            _ibe_c1, _ibe_c2 = st.columns([1, 3])
+            _ibe_capitale = _ibe_c1.number_input(
+                "Capitale iniziale (€)", min_value=1_000, max_value=10_000_000,
+                value=100_000, step=10_000, key="ib_capitale_etf",
+            )
+            _ibe_orizzonte = _ibe_c1.slider(
+                "Orizzonte (anni)", 1, 30, 10, key="ib_orizzonte_etf",
+            )
+            try:
+                _ibe_info = {
+                    row["ISIN"]: {
+                        "classificazione": row.get("Categoria", ""),
+                        "perf_3y": row.get("Perf 3Y %"),
+                        "perf_1y": row.get("Perf 1Y %"),
+                    }
+                    for _, row in df_porto_etf.iterrows() if row.get("ISIN")
+                }
+                _ibe_w = {row["ISIN"]: (row.get("Peso %") or 0) / 100
+                          for _, row in df_porto_etf.iterrows() if row.get("ISIN")}
+                _ibe_mu_all, _ibe_cov_all = build_hybrid_mu_sigma(_ibe_info, {}, risk_free_rate=0.03)
+                _ibe_ok = [i for i in _ibe_w if i in _ibe_mu_all.index]
+                if _ibe_ok:
+                    _ibe_ws = pd.Series({i: _ibe_w[i] for i in _ibe_ok})
+                    _ibe_mu_p = float((_ibe_ws * _ibe_mu_all[_ibe_ok]).sum())
+                    _ibe_sig_p = float(np.sqrt(
+                        _ibe_ws.values @ _ibe_cov_all.loc[_ibe_ok, _ibe_ok].values @ _ibe_ws.values
+                    ))
+                    _ibe_fig = _ibbotson_cone_fig(
+                        [{"label": f"ETF {profilo_etf}", "mu": _ibe_mu_p,
+                          "sigma": _ibe_sig_p, "color": "#F4A300"}],
+                        orizzonte=_ibe_orizzonte,
+                        capitale=float(_ibe_capitale),
+                    )
+                    _ibe_c2.plotly_chart(_ibe_fig, use_container_width=True,
+                                         config={"displayModeBar": False})
+                    _ibe_c1.metric("Rendimento atteso (μ)", f"{_ibe_mu_p*100:.2f}%")
+                    _ibe_c1.metric("Volatilità (σ)", f"{_ibe_sig_p*100:.2f}%")
+                    _ibe_c1.metric("Sharpe stimato",
+                                   f"{(_ibe_mu_p - 0.03) / _ibe_sig_p:.2f}")
+                else:
+                    st.info("Dati insufficienti per la proiezione.")
+            except Exception as _ibe_e:
+                st.warning(f"Proiezione non disponibile: {_ibe_e}")
+
     else:
         st.info("Nessun ETF selezionato. Aggiorna i rendimenti ETF e/o rivedi le allocazioni.")
 
@@ -3569,6 +3739,33 @@ elif nav == "🔀 Comparatore":
             )
             st.plotly_chart(fig_rad, use_container_width=True,
                              config={"scrollZoom": False, "displayModeBar": False})
+
+        # ── CONO DI IBBOTSON (Comparatore) ──────────────────────────────
+        if len(_quant) >= 1:
+            st.subheader("📐 Cono di Ibbotson — confronto proiezioni")
+            st.caption(
+                "Proiezione log-normale per ciascun portafoglio. "
+                "Bande ±1σ e ±2σ. Non è un backtest né un rendimento garantito."
+            )
+            _ibc_c1, _ibc_c2 = st.columns([1, 3])
+            _ibc_capitale = _ibc_c1.number_input(
+                "Capitale iniziale (€)", min_value=1_000, max_value=10_000_000,
+                value=100_000, step=10_000, key="ib_capitale_comp",
+            )
+            _ibc_orizzonte = _ibc_c1.slider(
+                "Orizzonte (anni)", 1, 30, 10, key="ib_orizzonte_comp",
+            )
+            _ibc_colors = ["#1A73E8", "#E8711A", "#16A34A", "#9B59B6", "#E84040", "#F4A300"]
+            _ibc_series = [
+                {"label": n, "mu": d["ret"], "sigma": d["vol"],
+                 "color": _ibc_colors[i % len(_ibc_colors)]}
+                for i, (n, d) in enumerate(_quant)
+            ]
+            _ibc_fig = _ibbotson_cone_fig(
+                _ibc_series, orizzonte=_ibc_orizzonte, capitale=float(_ibc_capitale),
+            )
+            _ibc_c2.plotly_chart(_ibc_fig, use_container_width=True,
+                                  config={"displayModeBar": False})
 
         # ── EXPORT COMPARATORE ────────────────────────────────────────────
         st.markdown("---")
