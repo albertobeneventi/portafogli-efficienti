@@ -256,6 +256,82 @@ def _pct_fmt(val) -> str:
     return f"{val:+.2f}%"
 
 
+def _ibbotson_cone_png_mpl(
+    portfolios: list[dict],
+    orizzonte: int,
+    capitale: float,
+) -> bytes | None:
+    """PNG del cono di Ibbotson via matplotlib — non richiede kaleido."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import io as _io
+
+        t_arr = np.linspace(0, orizzonte, orizzonte * 12 + 1)
+        fig, ax = plt.subplots(figsize=(14, 5))
+
+        _COLORS = ["#1A73E8", "#F4A300", "#16A34A", "#9B59B6", "#E84040"]
+        legend_handles = []
+
+        all_down2, all_up2 = [], []
+        for idx, p in enumerate(portfolios):
+            mu, sigma, label = p["mu"], p["sigma"], p["label"]
+            color = p.get("color", _COLORS[idx % len(_COLORS)])
+            mu_log = mu - 0.5 * sigma ** 2
+            median = capitale * np.exp(mu_log * t_arr)
+            up1    = capitale * np.exp((mu_log + sigma) * t_arr)
+            down1  = capitale * np.exp((mu_log - sigma) * t_arr)
+            up2    = capitale * np.exp((mu_log + 2 * sigma) * t_arr)
+            down2  = capitale * np.exp((mu_log - 2 * sigma) * t_arr)
+            all_down2.append(down2); all_up2.append(up2)
+
+            ax.fill_between(t_arr, down2, up2,   alpha=0.10, color=color)
+            ax.fill_between(t_arr, down1, up1,   alpha=0.22, color=color)
+            ax.plot(t_arr, median, color=color, linewidth=2, label=f"{label} — mediana")
+            legend_handles.append(mpatches.Patch(color=color, label=label))
+
+        # Linea capitale iniziale
+        ax.axhline(capitale, color="#888888", linewidth=1.2, linestyle="--")
+        ax.text(orizzonte * 1.01, capitale, f"€{capitale:,.0f}",
+                va="center", ha="left", fontsize=9, color="#666666")
+
+        # Range y sensato
+        y_min = min(capitale * 0.45, min(d.min() for d in all_down2) * 0.95)
+        y_max = max(d.max() for d in all_up2) * 1.05
+        ax.set_ylim(y_min, y_max)
+        ax.set_xlim(0, orizzonte)
+
+        ax.set_xlabel("Anni", fontsize=10)
+        ax.set_ylabel("Valore portafoglio (€)", fontsize=10)
+        ax.yaxis.set_major_formatter(
+            matplotlib.ticker.FuncFormatter(lambda x, _: f"€{x:,.0f}")
+        )
+        ax.legend(handles=legend_handles, loc="upper left", fontsize=9)
+
+        # Bande in legenda
+        from matplotlib.patches import Patch
+        band_handles = [
+            Patch(color="gray", alpha=0.22, label="±1σ — 68% dei percorsi"),
+            Patch(color="gray", alpha=0.10, label="±2σ — 95% dei percorsi"),
+        ]
+        ax.legend(handles=legend_handles + band_handles, loc="upper left", fontsize=9)
+
+        ax.grid(True, alpha=0.3, linestyle=":")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        fig.tight_layout(pad=1.2)
+
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception:
+        return None
+
+
 def _ibbotson_cone_fig(
     portfolios: list[dict],   # [{"label": str, "mu": float, "sigma": float, "color": str}]
     orizzonte: int,
@@ -3274,16 +3350,12 @@ elif nav == "⭐ Portafoglio Qualità":
         # Genera PNG del cono per il PDF (usa orizzonte/capitale salvati in session_state o default)
         _ib_cone_bytes_q = None
         if _ib_mu_port_q is not None:
-            try:
-                _ib_cone_fig_pdf = _ibbotson_cone_fig(
-                    [{"label": f"Qualità {profilo}", "mu": _ib_mu_port_q,
-                      "sigma": _ib_sigma_port_q, "color": "#1A73E8"}],
-                    orizzonte=st.session_state.get("ib_orizzonte_q", 10),
-                    capitale=float(st.session_state.get("ib_capitale_q", 100_000)),
-                )
-                _ib_cone_bytes_q = plotly_to_png(_ib_cone_fig_pdf, width=1400, height=500)
-            except Exception:
-                pass
+            _ib_cone_bytes_q = _ibbotson_cone_png_mpl(
+                [{"label": f"Qualità {profilo}", "mu": _ib_mu_port_q,
+                  "sigma": _ib_sigma_port_q, "color": "#1A73E8"}],
+                orizzonte=st.session_state.get("ib_orizzonte_q", 10),
+                capitale=float(st.session_state.get("ib_capitale_q", 100_000)),
+            )
         pdf_q = export_portfolio_pdf(
             weights_q, metrics_q,
             title=f"Portafoglio Qualità — {profilo}",
@@ -3592,16 +3664,12 @@ elif nav == "🪙 Portafoglio ETF":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         _ibe_cone_bytes = None
         if _ibe_mu_p is not None:
-            try:
-                _ibe_cone_fig_pdf = _ibbotson_cone_fig(
-                    [{"label": f"ETF {profilo_etf}", "mu": _ibe_mu_p,
-                      "sigma": _ibe_sig_p, "color": "#F4A300"}],
-                    orizzonte=st.session_state.get("ib_orizzonte_etf", 10),
-                    capitale=float(st.session_state.get("ib_capitale_etf", 100_000)),
-                )
-                _ibe_cone_bytes = plotly_to_png(_ibe_cone_fig_pdf, width=1400, height=500)
-            except Exception:
-                pass
+            _ibe_cone_bytes = _ibbotson_cone_png_mpl(
+                [{"label": f"ETF {profilo_etf}", "mu": _ibe_mu_p,
+                  "sigma": _ibe_sig_p, "color": "#F4A300"}],
+                orizzonte=st.session_state.get("ib_orizzonte_etf", 10),
+                capitale=float(st.session_state.get("ib_capitale_etf", 100_000)),
+            )
         pdf_etf = export_portfolio_pdf(
             weights_etf, metrics_etf,
             title=f"Portafoglio ETF — {profilo_etf}",
