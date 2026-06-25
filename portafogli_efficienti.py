@@ -3043,34 +3043,84 @@ elif nav == "⭐ Portafoglio Qualità":
             _az_need = int(n_min_az_pq) - len(_az_strat_in_pq)
             _added_az = 0
             _added_names = []
+
+            # ── Distribuisci i slot Azimut proporzionalmente alle allocazioni bucket ──
+            # Es. portfolio 50% Azionario 30% Obbligazionario 20% Bilanciato + 3 Azimut
+            # → 1-2 Azionario, 1 Obbligazionario, 0-1 Bilanciato
+            # Questo evita che la classifica score (dominata da azionari in periodi bull)
+            # indirizzi tutti i fondi Azimut sullo stesso bucket.
+            _valid_buckets = [b for b in _available_buckets if b != "Altro"]
+            _total_alloc_pq = sum(alloc_adj.get(b, 0) for b in _valid_buckets) or 1
+            # Calcola quanti slot per bucket (arrotondamento con residuo al bucket più grande)
+            _az_quota: dict[str, int] = {}
+            _residuo = _az_need
+            _sorted_buckets = sorted(_valid_buckets,
+                                     key=lambda b: alloc_adj.get(b, 0), reverse=True)
+            for _bk in _sorted_buckets:
+                _q = round(_az_need * alloc_adj.get(_bk, 0) / _total_alloc_pq)
+                _az_quota[_bk] = _q
+                _residuo -= _q
+            # Aggiusta residuo sul bucket con peso maggiore
+            if _residuo != 0 and _sorted_buckets:
+                _az_quota[_sorted_buckets[0]] += _residuo
+
+            # Raggruppa fondi Azimut per bucket, già ordinati per score
+            _az_by_bucket: dict[str, list] = {b: [] for b in _valid_buckets}
             for _az_isin in _pq_az_ranked:
-                if _added_az >= _az_need:
-                    break
-                _az_row = _az_src_pq[_az_src_pq["isin"] == _az_isin]
-                if _az_row.empty:
+                _az_row_tmp = _az_src_pq[_az_src_pq["isin"] == _az_isin]
+                if _az_row_tmp.empty:
                     continue
+                _strat_k_tmp = _az_row_tmp.iloc[0]["_strat_key"]
+                if _strat_k_tmp in _az_strat_in_pq:
+                    continue
+                _cl_tmp = str(_az_row_tmp.iloc[0].get("classificazione", ""))
+                _bk_tmp = classify_bucket(_cl_tmp)
+                if _bk_tmp not in _az_by_bucket:
+                    # Bucket non nel portafoglio → pool di overflow
+                    _bk_tmp = _sorted_buckets[0] if _sorted_buckets else "Azionario"
+                _az_by_bucket.setdefault(_bk_tmp, []).append(_az_isin)
+
+            # Scorre bucket in ordine di peso, prende i top per score da ciascuno
+            _to_add_ordered: list[str] = []
+            _used_in_round = set()
+            # Round-robin: prende 1 alla volta da ciascun bucket finché riempie le quote
+            _quota_rem = dict(_az_quota)
+            _pool_iter = {b: iter(lst) for b, lst in _az_by_bucket.items()}
+            _exhausted = set()
+            while sum(_quota_rem.values()) > 0 and len(_exhausted) < len(_valid_buckets):
+                for _bk in _sorted_buckets:
+                    if _quota_rem.get(_bk, 0) <= 0 or _bk in _exhausted:
+                        continue
+                    try:
+                        _next_isin = next(_pool_iter[_bk])
+                        while _next_isin in _used_in_round:
+                            _next_isin = next(_pool_iter[_bk])
+                        _to_add_ordered.append(_next_isin)
+                        _used_in_round.add(_next_isin)
+                        _quota_rem[_bk] -= 1
+                    except StopIteration:
+                        _exhausted.add(_bk)
+
+            def _insert_az_fund(az_isin):
+                """Inserisce un fondo Azimut nel bucket corretto del portfolio."""
+                _az_row = _az_src_pq[_az_src_pq["isin"] == az_isin]
+                if _az_row.empty:
+                    return False
                 _strat_k = _az_row.iloc[0]["_strat_key"]
                 if _strat_k in _az_strat_in_pq:
-                    continue
-
+                    return False
                 _az_class = str(_az_row.iloc[0].get("classificazione", ""))
                 _az_bucket = classify_bucket(_az_class)
-
-                # Se il bucket non esiste nel portafoglio, scegli il più vicino disponibile
                 if _az_bucket not in _available_buckets or _az_bucket == "Altro":
-                    for _fallback in ["Azionario", "Obbligazionario", "Bilanciato"]:
-                        if _fallback in _available_buckets:
-                            _az_bucket = _fallback
+                    for _fb in ["Azionario", "Obbligazionario", "Bilanciato"]:
+                        if _fb in _available_buckets:
+                            _az_bucket = _fb
                             break
                     else:
                         _az_bucket = _available_buckets[0] if _available_buckets else "Azionario"
-
-                # Crea entry fondo Azimut con colonne minime necessarie
                 _az_entry = _az_row.drop(labels=["_strat_key"], errors="ignore").iloc[0].to_dict()
                 _az_entry["_peso_bucket"] = alloc_adj.get(_az_bucket, 10)
                 _az_df_new = pd.DataFrame([_az_entry])
-
-                # Aggiunge al bucket (dedup per ISIN e per share class) e ricalcola pesi equi
                 if _az_bucket in portfolio_buckets and portfolio_buckets[_az_bucket] is not None \
                         and not portfolio_buckets[_az_bucket].empty:
                     _existing = portfolio_buckets[_az_bucket]
@@ -3088,10 +3138,15 @@ elif nav == "⭐ Portafoglio Qualità":
                     _az_df_new["_peso_fondo"] = alloc_adj.get(_az_bucket, 10)
                     portfolio_buckets[_az_bucket] = _az_df_new
                     _available_buckets.append(_az_bucket)
-
                 _az_strat_in_pq.add(_strat_k)
-                _added_names.append(str(_az_row.iloc[0].get("nome", _az_isin))[:30])
-                _added_az += 1
+                _added_names.append(str(_az_row.iloc[0].get("nome", az_isin))[:30])
+                return True
+
+            for _az_isin in _to_add_ordered:
+                if _added_az >= _az_need:
+                    break
+                if _insert_az_fund(_az_isin):
+                    _added_az += 1
 
             if _added_az > 0:
                 st.info(
