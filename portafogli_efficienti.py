@@ -273,6 +273,7 @@ def _ibbotson_cone_fig(
     t_arr = np.linspace(0, orizzonte, orizzonte * 12 + 1)
     fig = go.Figure()
 
+    all_down2, all_up2 = [], []
     for p in portfolios:
         mu, sigma, label, color = p["mu"], p["sigma"], p["label"], p["color"]
         mu_log = mu - 0.5 * sigma ** 2
@@ -281,39 +282,67 @@ def _ibbotson_cone_fig(
         down1   = capitale * np.exp((mu_log - sigma) * t_arr)
         up2     = capitale * np.exp((mu_log + 2 * sigma) * t_arr)
         down2   = capitale * np.exp((mu_log - 2 * sigma) * t_arr)
+        all_down2.append(down2)
+        all_up2.append(up2)
 
         # Banda ±2σ
         fig.add_trace(go.Scatter(
             x=np.concatenate([t_arr, t_arr[::-1]]),
             y=np.concatenate([up2, down2[::-1]]),
-            fill="toself", fillcolor=color, opacity=0.08,
-            line=dict(width=0), showlegend=False, hoverinfo="skip",
+            fill="toself", fillcolor=color, opacity=0.10,
+            line=dict(width=0), showlegend=False,
+            name=f"{label} ±2σ (95%)",
+            hovertemplate=f"±2σ (95%)<br>Anno: %{{x:.1f}}<br>€%{{y:,.0f}}<extra></extra>",
         ))
         # Banda ±1σ
         fig.add_trace(go.Scatter(
             x=np.concatenate([t_arr, t_arr[::-1]]),
             y=np.concatenate([up1, down1[::-1]]),
-            fill="toself", fillcolor=color, opacity=0.18,
-            line=dict(width=0), showlegend=False, hoverinfo="skip",
+            fill="toself", fillcolor=color, opacity=0.22,
+            line=dict(width=0), showlegend=False,
+            name=f"{label} ±1σ (68%)",
+            hovertemplate=f"±1σ (68%)<br>Anno: %{{x:.1f}}<br>€%{{y:,.0f}}<extra></extra>",
         ))
         # Percorso mediano
         fig.add_trace(go.Scatter(
             x=t_arr, y=median,
-            mode="lines", name=label,
+            mode="lines", name=f"{label} — mediana",
             line=dict(color=color, width=2.5),
-            hovertemplate=f"<b>{label}</b><br>Anno: %{{x:.1f}}<br>Valore mediano: €%{{y:,.0f}}<extra></extra>",
+            hovertemplate=f"<b>{label}</b><br>Anno: %{{x:.1f}}<br>Mediana: €%{{y:,.0f}}<extra></extra>",
         ))
 
-    # Linea capitale iniziale (orizzontale tratteggiata)
-    fig.add_hline(y=capitale, line_dash="dot", line_color="gray", opacity=0.5)
+    # Linea capitale iniziale — più visibile, con etichetta
+    fig.add_trace(go.Scatter(
+        x=[0, orizzonte], y=[capitale, capitale],
+        mode="lines+text",
+        line=dict(color="#888888", width=1.5, dash="dot"),
+        name="Capitale iniziale",
+        text=["", f"  €{capitale:,.0f}"],
+        textposition="middle right",
+        textfont=dict(size=11, color="#666666"),
+        hovertemplate=f"Capitale iniziale: €{capitale:,.0f}<extra></extra>",
+    ))
+    # Marcatore a t=0
+    fig.add_trace(go.Scatter(
+        x=[0], y=[capitale],
+        mode="markers",
+        marker=dict(size=8, color="#555555", symbol="circle"),
+        showlegend=False, hoverinfo="skip",
+    ))
 
+    # Range y: da ~40% del capitale al massimo della banda ±2σ finale, con margine
+    y_min = min(capitale * 0.45, min(d.min() for d in all_down2) * 0.95)
+    y_max = max(d.max() for d in all_up2) * 1.05
     fig.update_layout(
         xaxis_title="Anni",
-        yaxis_title="Valore portafoglio (€)",
-        yaxis_tickformat=",.0f",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        height=400,
-        margin=dict(l=10, r=10, t=30, b=10),
+        yaxis=dict(
+            title="Valore portafoglio (€)",
+            tickformat=",.0f",
+            range=[y_min, y_max],
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=420,
+        margin=dict(l=10, r=80, t=30, b=10),  # r=80 per etichetta capitale a destra
         hovermode="x unified",
     )
     return fig
