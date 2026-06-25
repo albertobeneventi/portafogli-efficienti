@@ -619,10 +619,12 @@ def export_portfolio_pdf(
             story.append(Paragraph("Scenari per orizzonte temporale", h2_style))
             story.append(Paragraph(
                 _safe_str(
-                    "Valori in € del portafoglio ai percentili della distribuzione log-normale. "
-                    "−2σ (2.5%): solo il 2.5% dei percorsi finisce più in basso. "
-                    "Mediana (50%): caso centrale più probabile. "
-                    "+2σ (97.5%): solo il 2.5% finisce più in alto."
+                    "Valori in euro del portafoglio nei diversi scenari. "
+                    "'Scenario molto sfavorevole': solo il 2.5% dei casi reali storici ha prodotto "
+                    "risultati peggiori di questo. "
+                    "'Caso centrale': meta' dei casi finisce sopra, meta' sotto. "
+                    "'Scenario molto favorevole': solo il 2.5% dei casi supera questo valore. "
+                    "Non e' una previsione ne' una garanzia di rendimento."
                 ),
                 note_style,
             ))
@@ -633,8 +635,12 @@ def export_portfolio_pdf(
                 if len(cone_portfolios) > 1:
                     story.append(Paragraph(_safe_str(_lbl), small))
 
-                _hdr = ["Anni", "-2σ  2.5%", "-1σ  16%",
-                        "Mediana 50%", "+1σ  84%", "+2σ  97.5%"]
+                _hdr = ["Anni",
+                        "Scenario molto\nsfavorevole",
+                        "Scenario\nsfavorevole",
+                        "Caso centrale\n(più probabile)",
+                        "Scenario\nfavorevole",
+                        "Scenario molto\nfavorevole"]
                 _tbl_data = [[Paragraph(_safe_str(h), cell_h_style) for h in _hdr]]
                 for _t in _years:
                     _row_vals = [

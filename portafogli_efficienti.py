@@ -442,11 +442,11 @@ def _ibbotson_table(
             rows.append({
                 "Portafoglio": label,
                 "Anni": t,
-                "−2σ  (2.5%)": capitale * np.exp((mu_log - 2 * sigma) * t),
-                "−1σ  (16%)":  capitale * np.exp((mu_log - sigma) * t),
-                "Mediana (50%)": capitale * np.exp(mu_log * t),
-                "+1σ  (84%)":  capitale * np.exp((mu_log + sigma) * t),
-                "+2σ  (97.5%)": capitale * np.exp((mu_log + 2 * sigma) * t),
+                "Scenario molto sfavorevole": capitale * np.exp((mu_log - 2 * sigma) * t),
+                "Scenario sfavorevole":       capitale * np.exp((mu_log - sigma) * t),
+                "Caso centrale (più probabile)": capitale * np.exp(mu_log * t),
+                "Scenario favorevole":         capitale * np.exp((mu_log + sigma) * t),
+                "Scenario molto favorevole":   capitale * np.exp((mu_log + 2 * sigma) * t),
             })
     return pd.DataFrame(rows)
 
@@ -3491,9 +3491,10 @@ elif nav == "⭐ Portafoglio Qualità":
                     st.dataframe(_ib_tbl_q, hide_index=True, use_container_width=True,
                                  column_config=_fmt_q)
                     st.caption(
-                        "Ogni colonna è un percentile della distribuzione log-normale: "
-                        "il 2.5% dei percorsi storicamente scende sotto −2σ, "
-                        "il 16% scende sotto −1σ. La mediana è il valore 'tipico' (caso centrale)."
+                        "Lettura: 'Scenario molto sfavorevole' = solo il 2.5% dei casi reali storici "
+                        "ha prodotto risultati peggiori. 'Caso centrale' = metà dei casi finisce sopra, "
+                        "metà sotto. 'Scenario molto favorevole' = solo il 2.5% supera quel valore. "
+                        "Non è una previsione né una garanzia."
                     )
             else:
                 st.info("Dati insufficienti per la proiezione.")
@@ -3811,8 +3812,10 @@ elif nav == "🪙 Portafoglio ETF":
                     st.dataframe(_ibe_tbl, hide_index=True, use_container_width=True,
                                  column_config=_fmt_e)
                     st.caption(
-                        "Ogni colonna è un percentile: il 2.5% dei percorsi scende sotto −2σ, "
-                        "il 16% sotto −1σ. La mediana rappresenta il caso centrale."
+                        "Lettura: 'Scenario molto sfavorevole' = solo il 2.5% dei casi reali storici "
+                        "ha prodotto risultati peggiori. 'Caso centrale' = metà dei casi finisce sopra, "
+                        "metà sotto. 'Scenario molto favorevole' = solo il 2.5% supera quel valore. "
+                        "Non è una previsione né una garanzia."
                     )
             else:
                 st.info("Dati insufficienti per la proiezione.")
@@ -4083,11 +4086,10 @@ elif nav == "🔀 Comparatore":
                 st.dataframe(_ibc_tbl_raw, hide_index=True, use_container_width=True,
                              column_config=_fmt_c)
                 st.caption(
-                    "Colonne: percentili della distribuzione log-normale. "
-                    "−2σ (2.5%): solo il 2.5% dei percorsi finisce più in basso. "
-                    "Mediana (50%): valore più probabile. "
-                    "+2σ (97.5%): solo il 2.5% dei percorsi finisce più in alto. "
-                    "Non è un backtest né una garanzia di rendimento."
+                    "Lettura: 'Scenario molto sfavorevole' = solo il 2.5% dei casi reali storici "
+                    "ha prodotto risultati peggiori. 'Caso centrale' = metà dei casi finisce sopra, "
+                    "metà sotto. 'Scenario molto favorevole' = solo il 2.5% supera quel valore. "
+                    "Non è una previsione né una garanzia."
                 )
 
         # ── EXPORT COMPARATORE ────────────────────────────────────────────
