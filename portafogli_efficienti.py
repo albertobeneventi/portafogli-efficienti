@@ -3147,23 +3147,25 @@ elif nav == "⭐ Portafoglio Qualità":
                 _added_names.append(str(_az_row.iloc[0].get("nome", az_isin))[:30])
                 return True
 
+            _inserted_isins: set[str] = set()
             for _az_isin in _to_add_ordered:
                 if _added_az >= _az_need:
                     break
                 if _insert_az_fund(_az_isin):
                     _added_az += 1
+                    _inserted_isins.add(_az_isin)
 
-            # Fallback: se dopo la distribuzione proporzionale mancano ancora slot,
-            # prende i migliori Azimut rimanenti indipendentemente dal bucket
+            # Fallback: se mancano ancora slot, scorre tutta la lista per score
+            # escludendo solo quelli già inseriti con successo (non quelli tentati e falliti)
             if _added_az < _az_need:
-                _already_used = set(_to_add_ordered)
                 for _az_isin in _pq_az_ranked:
                     if _added_az >= _az_need:
                         break
-                    if _az_isin in _already_used:
+                    if _az_isin in _inserted_isins:
                         continue
                     if _insert_az_fund(_az_isin):
                         _added_az += 1
+                        _inserted_isins.add(_az_isin)
 
             if _added_az > 0:
                 st.info(
