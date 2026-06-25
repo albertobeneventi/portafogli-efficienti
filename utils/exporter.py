@@ -652,7 +652,7 @@ def export_portfolio_pdf(
                     ]
                     _tbl_data.append(
                         [Paragraph(_safe_str(str(_t)), cell_style)]
-                        + [Paragraph(_safe_str(f"€{v:,.0f}"), cell_style)
+                        + [Paragraph(f"€ {v:,.0f}".replace(",", "."), cell_style)
                            for v in _row_vals]
                     )
 
