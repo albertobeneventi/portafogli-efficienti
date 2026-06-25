@@ -451,24 +451,29 @@ def _ibbotson_table(
     return pd.DataFrame(rows)
 
 
-def _ibbotson_reliability(n_with_data: int, n_total: int) -> tuple[str, str]:
-    """Restituisce (emoji+label, spiegazione) sull'affidabilità della stima."""
-    pct = n_with_data / max(n_total, 1)
-    if pct >= 0.75:
+def _ibbotson_reliability(n_with_data: int, n_total: int) -> tuple[str, str, int]:
+    """Restituisce (emoji+label, spiegazione, percentuale) sull'affidabilità della stima.
+
+    Percentuale = 40% base (μ sempre stimato forward-looking) + fino a 35% per σ reale.
+    Range: 40% (tutti prior) → 75% (tutti dati storici reali).
+    """
+    pct_data = n_with_data / max(n_total, 1)
+    reliability_pct = round(40 + 35 * pct_data)
+    if pct_data >= 0.75:
         return "🟢 Alta", (
             f"{n_with_data}/{n_total} fondi con dati storici reali. "
-            "σ calcolata su NAV effettivi; μ da prior di categoria forward-looking."
-        )
-    elif pct >= 0.40:
+            "Volatilità calcolata su NAV effettivi; rendimento atteso da prior forward-looking."
+        ), reliability_pct
+    elif pct_data >= 0.40:
         return "🟡 Moderata", (
             f"{n_with_data}/{n_total} fondi con dati storici. "
-            "Parte di σ stimata da prior di categoria; μ sempre forward-looking."
-        )
+            "Volatilità parzialmente stimata; rendimento atteso sempre forward-looking."
+        ), reliability_pct
     else:
         return "🟠 Indicativa", (
             f"Solo {n_with_data}/{n_total} fondi con dati storici. "
-            "σ prevalentemente da prior di categoria — usare come ordine di grandezza."
-        )
+            "Parametri prevalentemente da stime di categoria."
+        ), reliability_pct
 
 
 # ---------------------------------------------------------------------------
@@ -3438,6 +3443,9 @@ elif nav == "⭐ Portafoglio Qualità":
                              if _ib_mu_port_q is not None else None,
             cone_capitale=float(st.session_state.get("ib_capitale_q", 100_000)),
             cone_orizzonte=int(st.session_state.get("ib_orizzonte_q", 10)),
+            cone_reliability_pct=_ibbotson_reliability(
+                int(df_porto["Perf 3Y %"].notna().sum()) if "Perf 3Y %" in df_porto.columns else 0,
+                len(df_porto))[2] if _ib_mu_port_q is not None else None,
         )
         if pdf_q:
             exp_c2.download_button("📄 Esporta PDF", data=pdf_q,
@@ -3476,9 +3484,9 @@ elif nav == "⭐ Portafoglio Qualità":
                               f"{(_ib_mu_port_q - 0.03) / _ib_sigma_port_q:.2f}")
                 # Affidabilità
                 _ib_n_data_q = int(df_porto["Perf 3Y %"].notna().sum()) if "Perf 3Y %" in df_porto.columns else 0
-                _ib_rel_label, _ib_rel_note = _ibbotson_reliability(_ib_n_data_q, len(df_porto))
-                _ib_c1.markdown(f"**Affidabilità stima:** {_ib_rel_label}")
-                st.caption(f"ℹ️ {_ib_rel_note}")
+                _ib_rel_label, _ib_rel_note, _ib_rel_pct = _ibbotson_reliability(_ib_n_data_q, len(df_porto))
+                _ib_c1.metric("Attendibilità stima", f"{_ib_rel_pct}%")
+                _ib_c1.caption(_ib_rel_note)
                 # Tabella scenari
                 st.markdown("**📊 Scenari per orizzonte temporale**")
                 _ib_yrs_q = [y for y in (1, 3, 5, 10) if y <= _ib_orizzonte_q]
@@ -3491,10 +3499,9 @@ elif nav == "⭐ Portafoglio Qualità":
                     st.dataframe(_ib_tbl_q, hide_index=True, use_container_width=True,
                                  column_config=_fmt_q)
                     st.caption(
-                        "Lettura: 'Scenario molto sfavorevole' = solo il 2.5% dei casi reali storici "
-                        "ha prodotto risultati peggiori. 'Caso centrale' = metà dei casi finisce sopra, "
-                        "metà sotto. 'Scenario molto favorevole' = solo il 2.5% supera quel valore. "
-                        "Non è una previsione né una garanzia."
+                        "'Scenario molto sfavorevole': solo il 2.5% dei casi reali ha fatto peggio. "
+                        "'Caso centrale': metà dei casi finisce sopra, metà sotto. "
+                        "'Scenario molto favorevole': solo il 2.5% dei casi supera questo valore."
                     )
             else:
                 st.info("Dati insufficienti per la proiezione.")
@@ -3759,6 +3766,9 @@ elif nav == "🪙 Portafoglio ETF":
                              if _ibe_mu_p is not None else None,
             cone_capitale=float(st.session_state.get("ib_capitale_etf", 100_000)),
             cone_orizzonte=int(st.session_state.get("ib_orizzonte_etf", 10)),
+            cone_reliability_pct=_ibbotson_reliability(
+                int(df_porto_etf["Perf 3Y %"].notna().sum()) if "Perf 3Y %" in df_porto_etf.columns else 0,
+                len(df_porto_etf))[2] if _ibe_mu_p is not None else None,
         )
         if pdf_etf:
             exp_e2.download_button("📄 Esporta PDF", data=pdf_etf,
@@ -3797,10 +3807,10 @@ elif nav == "🪙 Portafoglio ETF":
                                f"{(_ibe_mu_p - 0.03) / _ibe_sig_p:.2f}")
                 _ibe_n_data = int(df_porto_etf["Perf 3Y %"].notna().sum()) \
                     if "Perf 3Y %" in df_porto_etf.columns else 0
-                _ibe_rel_label, _ibe_rel_note = _ibbotson_reliability(
+                _ibe_rel_label, _ibe_rel_note, _ibe_rel_pct = _ibbotson_reliability(
                     _ibe_n_data, len(df_porto_etf))
-                _ibe_c1.markdown(f"**Affidabilità stima:** {_ibe_rel_label}")
-                st.caption(f"ℹ️ {_ibe_rel_note}")
+                _ibe_c1.metric("Attendibilità stima", f"{_ibe_rel_pct}%")
+                _ibe_c1.caption(_ibe_rel_note)
                 _ibe_yrs = [y for y in (1, 3, 5, 10) if y <= _ibe_orizzonte]
                 if _ibe_yrs:
                     st.markdown("**📊 Scenari per orizzonte temporale**")
@@ -3812,10 +3822,9 @@ elif nav == "🪙 Portafoglio ETF":
                     st.dataframe(_ibe_tbl, hide_index=True, use_container_width=True,
                                  column_config=_fmt_e)
                     st.caption(
-                        "Lettura: 'Scenario molto sfavorevole' = solo il 2.5% dei casi reali storici "
-                        "ha prodotto risultati peggiori. 'Caso centrale' = metà dei casi finisce sopra, "
-                        "metà sotto. 'Scenario molto favorevole' = solo il 2.5% supera quel valore. "
-                        "Non è una previsione né una garanzia."
+                        "'Scenario molto sfavorevole': solo il 2.5% dei casi reali ha fatto peggio. "
+                        "'Caso centrale': metà dei casi finisce sopra, metà sotto. "
+                        "'Scenario molto favorevole': solo il 2.5% dei casi supera questo valore."
                     )
             else:
                 st.info("Dati insufficienti per la proiezione.")

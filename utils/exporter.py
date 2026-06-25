@@ -358,6 +358,7 @@ def export_portfolio_pdf(
     cone_portfolios: Optional[list] = None,   # [{"label":str,"mu":float,"sigma":float}]
     cone_capitale: float = 100_000,
     cone_orizzonte: int = 10,
+    cone_reliability_pct: Optional[int] = None,
 ) -> bytes:
     """
     Genera PDF con:
@@ -592,16 +593,17 @@ def export_portfolio_pdf(
     # ── Cono di Ibbotson ─────────────────────────────────────────────────
     if cone_bytes:
         story.append(PageBreak())
-        story.append(Paragraph("📐 Cono di Ibbotson — Proiezione futura", h1_style))
+        _rel_str = (f"  |  Attendibilita' della stima: {cone_reliability_pct}%"
+                    if cone_reliability_pct is not None else "")
+        story.append(Paragraph(
+            _safe_str(f"Cono di Ibbotson — Proiezione futura{_rel_str}"), h1_style))
         story.append(Paragraph(
             _safe_str(
-                "Il grafico mostra la distribuzione log-normale del valore futuro del "
-                "portafoglio nel tempo. La linea centrale è la mediana (50° percentile). "
-                "Le bande interne coprono il 68% dei casi (±1σ, percentili 16°–84°); "
-                "le bande esterne il 95% dei casi (±2σ, percentili 2.5°–97.5°). "
-                "I parametri μ (rendimento atteso) e σ (volatilità) sono stimati con il "
-                "metodo ibrido: prior di categoria forward-looking per μ, dati storici "
-                "disponibili per σ. Non costituisce previsione né garanzia di rendimento."
+                "Il grafico mostra il possibile valore futuro del portafoglio nel tempo. "
+                "La linea centrale e' il caso piu' probabile (mediana). "
+                "Le bande mostrano la dispersione attorno ad esso: "
+                "quella interna copre il 68% degli scenari storici, "
+                "quella esterna il 95%."
             ),
             note_style,
         ))
@@ -620,11 +622,9 @@ def export_portfolio_pdf(
             story.append(Paragraph(
                 _safe_str(
                     "Valori in euro del portafoglio nei diversi scenari. "
-                    "'Scenario molto sfavorevole': solo il 2.5% dei casi reali storici ha prodotto "
-                    "risultati peggiori di questo. "
+                    "'Scenario molto sfavorevole': solo il 2.5% dei casi reali ha fatto peggio. "
                     "'Caso centrale': meta' dei casi finisce sopra, meta' sotto. "
-                    "'Scenario molto favorevole': solo il 2.5% dei casi supera questo valore. "
-                    "Non e' una previsione ne' una garanzia di rendimento."
+                    "'Scenario molto favorevole': solo il 2.5% dei casi supera questo valore."
                 ),
                 note_style,
             ))
