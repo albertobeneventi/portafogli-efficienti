@@ -44,6 +44,7 @@ from utils.optimizer import (
 from utils.exporter import (
     export_portfolio_excel, export_portfolio_pdf,
     export_advisorelite_csv, export_advisorelite_excel,
+    plotly_to_png,
 )
 
 # ---------------------------------------------------------------------------
@@ -3158,6 +3159,30 @@ elif nav == "⭐ Portafoglio Qualità":
             else:
                 st.info("Dati storici non sufficienti. Le correlazioni saranno disponibili dopo il fetch NAV.")
 
+        # ── Pre-calcolo μ/σ per il cono (usato sia nell'expander che nel PDF) ──
+        _ib_mu_port_q = _ib_sigma_port_q = None
+        try:
+            _ib_info_q = {
+                row["ISIN"]: {
+                    "classificazione": row.get("Classificazione", ""),
+                    "perf_3y": row.get("Perf 3Y %"),
+                    "perf_1y": row.get("Perf 1Y %"),
+                }
+                for _, row in df_porto.iterrows() if row.get("ISIN")
+            }
+            _ib_w_q = {row["ISIN"]: (row.get("Peso %") or 0) / 100
+                       for _, row in df_porto.iterrows() if row.get("ISIN")}
+            _ib_mu_q, _ib_cov_q = build_hybrid_mu_sigma(_ib_info_q, {}, risk_free_rate=0.03)
+            _ib_isins_ok_q = [i for i in _ib_w_q if i in _ib_mu_q.index]
+            if _ib_isins_ok_q:
+                _ib_ws_q = pd.Series({i: _ib_w_q[i] for i in _ib_isins_ok_q})
+                _ib_mu_port_q = float((_ib_ws_q * _ib_mu_q[_ib_isins_ok_q]).sum())
+                _ib_sigma_port_q = float(np.sqrt(
+                    _ib_ws_q.values @ _ib_cov_q.loc[_ib_isins_ok_q, _ib_isins_ok_q].values @ _ib_ws_q.values
+                ))
+        except Exception:
+            pass
+
         # Export
         st.markdown("---")
         exp_c1, exp_c2 = st.columns(2)
@@ -3170,6 +3195,19 @@ elif nav == "⭐ Portafoglio Qualità":
         exp_c1.download_button("📥 Esporta Excel", data=excel_q,
             file_name=f"portafoglio_qualita_{profilo.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        # Genera PNG del cono per il PDF (usa orizzonte/capitale salvati in session_state o default)
+        _ib_cone_bytes_q = None
+        if _ib_mu_port_q is not None:
+            try:
+                _ib_cone_fig_pdf = _ibbotson_cone_fig(
+                    [{"label": f"Qualità {profilo}", "mu": _ib_mu_port_q,
+                      "sigma": _ib_sigma_port_q, "color": "#1A73E8"}],
+                    orizzonte=st.session_state.get("ib_orizzonte_q", 10),
+                    capitale=float(st.session_state.get("ib_capitale_q", 100_000)),
+                )
+                _ib_cone_bytes_q = plotly_to_png(_ib_cone_fig_pdf, width=1400, height=500)
+            except Exception:
+                pass
         pdf_q = export_portfolio_pdf(
             weights_q, metrics_q,
             title=f"Portafoglio Qualità — {profilo}",
@@ -3179,6 +3217,7 @@ elif nav == "⭐ Portafoglio Qualità":
                 "nome": r["Fondo"], "classificazione": r["Classificazione"],
                 "perf_3y": r.get("Perf 3Y %"), "rating_fida": r.get("★ FIDA"),
             } for _, r in df_porto.iterrows()},
+            cone_bytes=_ib_cone_bytes_q,
         )
         if pdf_q:
             exp_c2.download_button("📄 Esporta PDF", data=pdf_q,
@@ -3201,43 +3240,21 @@ elif nav == "⭐ Portafoglio Qualità":
             _ib_orizzonte_q = _ib_c1.slider(
                 "Orizzonte (anni)", 1, 30, 10, key="ib_orizzonte_q",
             )
-            # Stima μ/σ del portafoglio Qualità con build_hybrid_mu_sigma
-            try:
-                _ib_info_q = {
-                    row["ISIN"]: {
-                        "classificazione": row.get("Classificazione", ""),
-                        "perf_3y": row.get("Perf 3Y %"),
-                        "perf_1y": row.get("Perf 1Y %"),
-                    }
-                    for _, row in df_porto.iterrows()
-                    if row.get("ISIN")
-                }
-                _ib_w_q = {row["ISIN"]: (row.get("Peso %") or 0) / 100
-                           for _, row in df_porto.iterrows() if row.get("ISIN")}
-                _ib_mu_q, _ib_cov_q = build_hybrid_mu_sigma(_ib_info_q, {}, risk_free_rate=0.03)
-                _ib_isins_ok_q = [i for i in _ib_w_q if i in _ib_mu_q.index]
-                if _ib_isins_ok_q:
-                    _ib_ws_q = pd.Series({i: _ib_w_q[i] for i in _ib_isins_ok_q})
-                    _ib_mu_port_q = float((_ib_ws_q * _ib_mu_q[_ib_isins_ok_q]).sum())
-                    _ib_sigma_port_q = float(np.sqrt(
-                        _ib_ws_q.values @ _ib_cov_q.loc[_ib_isins_ok_q, _ib_isins_ok_q].values @ _ib_ws_q.values
-                    ))
-                    _ib_fig_q = _ibbotson_cone_fig(
-                        [{"label": f"Qualità {profilo}", "mu": _ib_mu_port_q,
-                          "sigma": _ib_sigma_port_q, "color": "#1A73E8"}],
-                        orizzonte=_ib_orizzonte_q,
-                        capitale=float(_ib_capitale_q),
-                    )
-                    _ib_c2.plotly_chart(_ib_fig_q, use_container_width=True,
-                                        config={"displayModeBar": False})
-                    _ib_c1.metric("Rendimento atteso (μ)", f"{_ib_mu_port_q*100:.2f}%")
-                    _ib_c1.metric("Volatilità (σ)", f"{_ib_sigma_port_q*100:.2f}%")
-                    _ib_c1.metric("Sharpe stimato",
-                                  f"{(_ib_mu_port_q - 0.03) / _ib_sigma_port_q:.2f}")
-                else:
-                    st.info("Dati insufficienti per la proiezione.")
-            except Exception as _ib_e:
-                st.warning(f"Proiezione non disponibile: {_ib_e}")
+            if _ib_mu_port_q is not None:
+                _ib_fig_q = _ibbotson_cone_fig(
+                    [{"label": f"Qualità {profilo}", "mu": _ib_mu_port_q,
+                      "sigma": _ib_sigma_port_q, "color": "#1A73E8"}],
+                    orizzonte=_ib_orizzonte_q,
+                    capitale=float(_ib_capitale_q),
+                )
+                _ib_c2.plotly_chart(_ib_fig_q, use_container_width=True,
+                                    config={"displayModeBar": False})
+                _ib_c1.metric("Rendimento atteso (μ)", f"{_ib_mu_port_q*100:.2f}%")
+                _ib_c1.metric("Volatilità (σ)", f"{_ib_sigma_port_q*100:.2f}%")
+                _ib_c1.metric("Sharpe stimato",
+                              f"{(_ib_mu_port_q - 0.03) / _ib_sigma_port_q:.2f}")
+            else:
+                st.info("Dati insufficienti per la proiezione.")
 
 
 # ===========================================================================
@@ -3439,6 +3456,30 @@ elif nav == "🪙 Portafoglio ETF":
         if _avg_ter is not None:
             st.caption(f"💰 TER medio ponderato del portafoglio: **{_avg_ter:.2f}%**")
 
+        # ── Pre-calcolo μ/σ ETF per cono ──────────────────────────────────
+        _ibe_mu_p = _ibe_sig_p = None
+        try:
+            _ibe_info = {
+                row["ISIN"]: {
+                    "classificazione": row.get("Categoria", ""),
+                    "perf_3y": row.get("Perf 3Y %"),
+                    "perf_1y": row.get("Perf 1Y %"),
+                }
+                for _, row in df_porto_etf.iterrows() if row.get("ISIN")
+            }
+            _ibe_w = {row["ISIN"]: (row.get("Peso %") or 0) / 100
+                      for _, row in df_porto_etf.iterrows() if row.get("ISIN")}
+            _ibe_mu_all, _ibe_cov_all = build_hybrid_mu_sigma(_ibe_info, {}, risk_free_rate=0.03)
+            _ibe_ok = [i for i in _ibe_w if i in _ibe_mu_all.index]
+            if _ibe_ok:
+                _ibe_ws = pd.Series({i: _ibe_w[i] for i in _ibe_ok})
+                _ibe_mu_p = float((_ibe_ws * _ibe_mu_all[_ibe_ok]).sum())
+                _ibe_sig_p = float(np.sqrt(
+                    _ibe_ws.values @ _ibe_cov_all.loc[_ibe_ok, _ibe_ok].values @ _ibe_ws.values
+                ))
+        except Exception:
+            pass
+
         st.markdown("---")
         exp_e1, exp_e2 = st.columns(2)
         weights_etf = {r["ISIN"]: (r["Peso %"] or 0) / 100 for _, r in df_porto_etf.iterrows()}
@@ -3451,6 +3492,18 @@ elif nav == "🪙 Portafoglio ETF":
         exp_e1.download_button("📥 Esporta Excel", data=excel_etf,
             file_name=f"portafoglio_etf_{profilo_etf.lower()}_{datetime.now().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        _ibe_cone_bytes = None
+        if _ibe_mu_p is not None:
+            try:
+                _ibe_cone_fig_pdf = _ibbotson_cone_fig(
+                    [{"label": f"ETF {profilo_etf}", "mu": _ibe_mu_p,
+                      "sigma": _ibe_sig_p, "color": "#F4A300"}],
+                    orizzonte=st.session_state.get("ib_orizzonte_etf", 10),
+                    capitale=float(st.session_state.get("ib_capitale_etf", 100_000)),
+                )
+                _ibe_cone_bytes = plotly_to_png(_ibe_cone_fig_pdf, width=1400, height=500)
+            except Exception:
+                pass
         pdf_etf = export_portfolio_pdf(
             weights_etf, metrics_etf,
             title=f"Portafoglio ETF — {profilo_etf}",
@@ -3461,6 +3514,7 @@ elif nav == "🪙 Portafoglio ETF":
                 "perf_3y": r.get("Perf 3Y %"), "rating_fida": None,
             } for _, r in df_porto_etf.iterrows()},
             include_stars=False,
+            cone_bytes=_ibe_cone_bytes,
         )
         if pdf_etf:
             exp_e2.download_button("📄 Esporta PDF", data=pdf_etf,
@@ -3483,41 +3537,21 @@ elif nav == "🪙 Portafoglio ETF":
             _ibe_orizzonte = _ibe_c1.slider(
                 "Orizzonte (anni)", 1, 30, 10, key="ib_orizzonte_etf",
             )
-            try:
-                _ibe_info = {
-                    row["ISIN"]: {
-                        "classificazione": row.get("Categoria", ""),
-                        "perf_3y": row.get("Perf 3Y %"),
-                        "perf_1y": row.get("Perf 1Y %"),
-                    }
-                    for _, row in df_porto_etf.iterrows() if row.get("ISIN")
-                }
-                _ibe_w = {row["ISIN"]: (row.get("Peso %") or 0) / 100
-                          for _, row in df_porto_etf.iterrows() if row.get("ISIN")}
-                _ibe_mu_all, _ibe_cov_all = build_hybrid_mu_sigma(_ibe_info, {}, risk_free_rate=0.03)
-                _ibe_ok = [i for i in _ibe_w if i in _ibe_mu_all.index]
-                if _ibe_ok:
-                    _ibe_ws = pd.Series({i: _ibe_w[i] for i in _ibe_ok})
-                    _ibe_mu_p = float((_ibe_ws * _ibe_mu_all[_ibe_ok]).sum())
-                    _ibe_sig_p = float(np.sqrt(
-                        _ibe_ws.values @ _ibe_cov_all.loc[_ibe_ok, _ibe_ok].values @ _ibe_ws.values
-                    ))
-                    _ibe_fig = _ibbotson_cone_fig(
-                        [{"label": f"ETF {profilo_etf}", "mu": _ibe_mu_p,
-                          "sigma": _ibe_sig_p, "color": "#F4A300"}],
-                        orizzonte=_ibe_orizzonte,
-                        capitale=float(_ibe_capitale),
-                    )
-                    _ibe_c2.plotly_chart(_ibe_fig, use_container_width=True,
-                                         config={"displayModeBar": False})
-                    _ibe_c1.metric("Rendimento atteso (μ)", f"{_ibe_mu_p*100:.2f}%")
-                    _ibe_c1.metric("Volatilità (σ)", f"{_ibe_sig_p*100:.2f}%")
-                    _ibe_c1.metric("Sharpe stimato",
-                                   f"{(_ibe_mu_p - 0.03) / _ibe_sig_p:.2f}")
-                else:
-                    st.info("Dati insufficienti per la proiezione.")
-            except Exception as _ibe_e:
-                st.warning(f"Proiezione non disponibile: {_ibe_e}")
+            if _ibe_mu_p is not None:
+                _ibe_fig = _ibbotson_cone_fig(
+                    [{"label": f"ETF {profilo_etf}", "mu": _ibe_mu_p,
+                      "sigma": _ibe_sig_p, "color": "#F4A300"}],
+                    orizzonte=_ibe_orizzonte,
+                    capitale=float(_ibe_capitale),
+                )
+                _ibe_c2.plotly_chart(_ibe_fig, use_container_width=True,
+                                     config={"displayModeBar": False})
+                _ibe_c1.metric("Rendimento atteso (μ)", f"{_ibe_mu_p*100:.2f}%")
+                _ibe_c1.metric("Volatilità (σ)", f"{_ibe_sig_p*100:.2f}%")
+                _ibe_c1.metric("Sharpe stimato",
+                               f"{(_ibe_mu_p - 0.03) / _ibe_sig_p:.2f}")
+            else:
+                st.info("Dati insufficienti per la proiezione.")
 
     else:
         st.info("Nessun ETF selezionato. Aggiorna i rendimenti ETF e/o rivedi le allocazioni.")
@@ -3983,13 +4017,14 @@ elif nav == "📖 Guida":
     )
 
     # ── TAB PRINCIPALI ──────────────────────────────────────────────────────
-    g1, g2, g3, g4, g5, g6 = st.tabs([
+    g1, g2, g3, g4, g5, g6, g7 = st.tabs([
         "📋 Le Liste e i Dati",
         "⭐ Score Qualità & Portafoglio Qualità",
         "📈 Frontiera Efficiente",
         "🔮 Black-Litterman",
         "📐 Regole di Diversificazione",
         "📊 File View di Mercato",
+        "📐 Cono di Ibbotson",
     ])
 
     # ── TAB 1: LE LISTE ─────────────────────────────────────────────────────
@@ -4492,6 +4527,123 @@ la classificazione dal nome del fondo** usando regole keyword:
 
 L'ordine è importante: *Obbligazionari* viene cercato PRIMA di *Azionari* per evitare
 che "obbligazionari" (che contiene "azionari") venga classificato erroneamente.
+""")
+
+    # ── TAB 7: CONO DI IBBOTSON ─────────────────────────────────────────────
+    with g7:
+        st.subheader("Cono di Ibbotson — cos'è e come interpretarlo")
+        st.markdown("""
+Il **Cono di Ibbotson** (o *Cone of Uncertainty*) è uno strumento di visualizzazione
+comunemente usato nella pianificazione finanziaria per mostrare l'**intervallo di valori
+futuri plausibili** di un portafoglio in funzione del tempo.
+
+Non è una previsione: è una rappresentazione statistica di ciò che *potrebbe* accadere,
+basata sulle caratteristiche di rischio/rendimento del portafoglio.
+""")
+
+        st.markdown("---")
+        st.subheader("📐 La matematica: distribuzione log-normale")
+        st.markdown("""
+I rendimenti finanziari si distribuiscono (approssimativamente) in modo **log-normale**:
+non possono scendere sotto –100% (il capitale non può diventare negativo), ma possono
+crescere illimitatamente. La distribuzione log-normale rispecchia questo comportamento.
+
+Dato un portafoglio con:
+- **μ** = rendimento atteso annuo (es. 6%)
+- **σ** = volatilità annua (es. 10%)
+
+il **valore mediano** del portafoglio all'anno *t* è:
+
+> V(t) = V₀ × exp( (μ − σ²/2) × t )
+
+dove *μ − σ²/2* è il **tasso di crescita geometrico** — il valore che il portafoglio
+si aspetta di raggiungere "nel caso tipico". Nota: è *inferiore* a μ perché la volatilità
+erode il rendimento composto (effetto della varianza).
+
+I **percentili** (le bande del cono) si ottengono aggiungendo o sottraendo multipli di σ:
+
+| Banda | Formula | Probabilità di rimanere dentro |
+|-------|---------|-------------------------------|
+| ±1σ | exp((μ − σ²/2 ± σ) × t) | ~68% dei percorsi |
+| ±2σ | exp((μ − σ²/2 ± 2σ) × t) | ~95% dei percorsi |
+
+Le bande si *allargano nel tempo* perché l'incertezza cresce: su 20 anni, anche piccole
+differenze di rendimento annuo portano a valori finali molto diversi.
+""")
+
+        st.markdown("---")
+        st.subheader("🔢 Attendibilità dei parametri μ e σ")
+        st.markdown("""
+I valori μ (rendimento atteso) e σ (volatilità) che l'app usa per costruire il cono
+**non sono inventati**: derivano dal metodo **ibrido** già usato dall'ottimizzatore:
+
+#### μ — Rendimento atteso
+Calcolato con un approccio **prior forward-looking per categoria**:
+- Ogni classificazione FIDA (es. *Azionari Globali*, *Obbligazionari High Yield*) ha
+  un rendimento atteso annuo di riferimento, derivato da stime di lungo periodo
+  basate su letteratura accademica e consensus di mercato (es. Damodaran, BIS, Fed).
+- Il prior viene combinato con i dati storici disponibili del fondo tramite il metodo
+  di Bayes: se ci sono molti dati storici, questi pesano di più; se i dati sono pochi
+  (come spesso per i fondi con serie storica corta), il prior domina.
+
+> **Non è un backtest.** È una stima forward-looking basata su prior di categoria,
+> coerente con l'approccio Black-Litterman usato nell'ottimizzazione.
+
+#### σ — Volatilità
+Stimata direttamente dai dati disponibili:
+- Se il fondo ha una serie storica di NAV → σ calcolata sui rendimenti mensili reali
+- Se non ci sono dati storici → σ stimata tramite prior di categoria (la deviazione
+  standard tipica di quella classe di attivo)
+
+> La σ è quindi più ancorata ai dati reali rispetto a μ: in genere riflette
+> correttamente il profilo di rischio storico dello strumento.
+
+#### Cosa significa in pratica
+I valori μ/σ sono **stime ragionevoli e metodologicamente fondate**, non casuali.
+Rappresentano però scenari attesi in condizioni di mercato "normali". Eventi estremi
+(crisi finanziarie, shock geopolitici) producono percorsi fuori dalle bande del cono —
+è normale e atteso: le bande ±2σ coprono il 95% degli scenari, non il 100%.
+""")
+
+        st.markdown("---")
+        st.subheader("🎯 Come leggere il grafico")
+        st.markdown("""
+| Elemento | Significato |
+|----------|-------------|
+| **Linea centrale** | Valore mediano atteso (50° percentile): il percorso "tipico" |
+| **Banda interna** (più scura) | Intervallo ±1σ: il 68% dei percorsi storicamente ricade qui |
+| **Banda esterna** (più chiara) | Intervallo ±2σ: il 95% dei percorsi storicamente ricade qui |
+| **Linea tratteggiata** | Capitale iniziale (riferimento per vedere se si è in guadagno) |
+| **Allargamento nel tempo** | L'incertezza cresce — dopo 20 anni la dispersione è molto maggiore che dopo 5 |
+
+**Esempio pratico:** se investi €100.000 in un portafoglio con μ=6%, σ=10%, dopo 10 anni:
+- Valore mediano: ~€155.000
+- Banda ±1σ: da ~€95.000 a ~€252.000
+- Banda ±2σ: da ~€58.000 a ~€410.000
+
+> La banda ampia non significa che il portafoglio è "sbagliato": è la rappresentazione
+> onesta dell'incertezza intrinseca dei mercati finanziari su orizzonti lunghi.
+
+#### Differenza rispetto alla media aritmetica
+L'asse centrale del cono segue la **mediana log-normale** (crescita geometrica),
+non la media aritmetica μ×t. Questo è più corretto: la mediana rappresenta
+il risultato "più probabile" per un investitore reale, mentre la media è distorta
+verso l'alto dagli scenari ottimistici estremi.
+""")
+
+        with st.expander("📚 Riferimenti metodologici"):
+            st.markdown("""
+- **Roger G. Ibbotson & Rex Sinquefield** (1976) — *Stocks, Bonds, Bills, and Inflation*:
+  prima sistematizzazione delle distribuzioni dei rendimenti azionari su lunghi periodi.
+- **Markowitz (1952)** — teoria della frontiera efficiente: il cono è coerente con il
+  framework media-varianza, esteso al dominio temporale.
+- **Distribuzione log-normale dei rendimenti**: Samuelson (1965), Black-Scholes (1973).
+  Ipotesi standard nei modelli di pianificazione finanziaria.
+- I **prior di categoria** per μ usati nell'app seguono le stime di lungo periodo di
+  Damodaran (NYU Stern), BIS Quarterly Reviews e consensus CFA Institute.
+- **Nota**: il cono di Ibbotson è uno strumento descrittivo, non predittivo. I mercati
+  reali mostrano *fat tails* (code grasse) e auto-correlazione: in pratica, le crisi
+  producono perdite oltre ±2σ con frequenza maggiore del 5% teorico.
 """)
 
 

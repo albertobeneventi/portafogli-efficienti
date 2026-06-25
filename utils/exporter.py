@@ -354,6 +354,7 @@ def export_portfolio_pdf(
     metrics_bl: Optional[dict] = None,
     bl_views: Optional[dict] = None,
     primary_title: str = "Portafoglio Max Sharpe",
+    cone_bytes: Optional[bytes] = None,
 ) -> bytes:
     """
     Genera PDF con:
@@ -584,6 +585,28 @@ def export_portfolio_pdf(
             m_dict=metrics_bl,
             note=note_bl,
         )
+
+    # ── Cono di Ibbotson ─────────────────────────────────────────────────
+    if cone_bytes:
+        story.append(PageBreak())
+        story.append(Paragraph("📐 Cono di Ibbotson — Proiezione futura", h1_style))
+        story.append(Paragraph(
+            _safe_str(
+                "Il grafico mostra la distribuzione log-normale del valore futuro del "
+                "portafoglio nel tempo. La linea centrale è la mediana (50° percentile). "
+                "Le bande interne coprono il 68% dei casi (±1σ, percentili 16°–84°); "
+                "le bande esterne il 95% dei casi (±2σ, percentili 2.5°–97.5°). "
+                "I parametri μ (rendimento atteso) e σ (volatilità) sono stimati con il "
+                "metodo ibrido: prior di categoria forward-looking per μ, dati storici "
+                "disponibili per σ. Non costituisce previsione né garanzia di rendimento."
+            ),
+            note_style,
+        ))
+        try:
+            cone_img = Image(io.BytesIO(cone_bytes), width=24.0 * cm, height=9 * cm)
+            story.append(cone_img)
+        except Exception as _ce:
+            story.append(Paragraph(f"Grafico cono non disponibile: {_ce}", small))
 
     # ── Footer ────────────────────────────────────────────────────────────
     story.append(HRFlowable(width="100%", thickness=0.5, color=GRAY_MID))
