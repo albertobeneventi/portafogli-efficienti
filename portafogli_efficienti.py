@@ -3148,6 +3148,18 @@ elif nav == "⭐ Portafoglio Qualità":
                 if _insert_az_fund(_az_isin):
                     _added_az += 1
 
+            # Fallback: se dopo la distribuzione proporzionale mancano ancora slot,
+            # prende i migliori Azimut rimanenti indipendentemente dal bucket
+            if _added_az < _az_need:
+                _already_used = set(_to_add_ordered)
+                for _az_isin in _pq_az_ranked:
+                    if _added_az >= _az_need:
+                        break
+                    if _az_isin in _already_used:
+                        continue
+                    if _insert_az_fund(_az_isin):
+                        _added_az += 1
+
             if _added_az > 0:
                 st.info(
                     f"🔵 **{_added_az} fondi Azimut aggiunti** al portafoglio: "
