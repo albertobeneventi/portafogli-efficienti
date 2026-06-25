@@ -355,6 +355,9 @@ def export_portfolio_pdf(
     bl_views: Optional[dict] = None,
     primary_title: str = "Portafoglio Max Sharpe",
     cone_bytes: Optional[bytes] = None,
+    cone_portfolios: Optional[list] = None,   # [{"label":str,"mu":float,"sigma":float}]
+    cone_capitale: float = 100_000,
+    cone_orizzonte: int = 10,
 ) -> bytes:
     """
     Genera PDF con:
@@ -607,6 +610,63 @@ def export_portfolio_pdf(
             story.append(cone_img)
         except Exception as _ce:
             story.append(Paragraph(f"Grafico cono non disponibile: {_ce}", small))
+
+        # ── Tabella scenari ───────────────────────────────────────────────
+        if cone_portfolios:
+            import math as _math
+            _years = [y for y in (1, 3, 5, 10) if y <= cone_orizzonte]
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("Scenari per orizzonte temporale", h2_style))
+            story.append(Paragraph(
+                _safe_str(
+                    "Valori in € del portafoglio ai percentili della distribuzione log-normale. "
+                    "−2σ (2.5%): solo il 2.5% dei percorsi finisce più in basso. "
+                    "Mediana (50%): caso centrale più probabile. "
+                    "+2σ (97.5%): solo il 2.5% finisce più in alto."
+                ),
+                note_style,
+            ))
+            for _cp in cone_portfolios:
+                _mu, _sig = _cp["mu"], _cp["sigma"]
+                _mu_log = _mu - 0.5 * _sig ** 2
+                _lbl = _cp.get("label", "")
+                if len(cone_portfolios) > 1:
+                    story.append(Paragraph(_safe_str(_lbl), small))
+
+                _hdr = ["Anni", "-2σ  2.5%", "-1σ  16%",
+                        "Mediana 50%", "+1σ  84%", "+2σ  97.5%"]
+                _tbl_data = [[Paragraph(_safe_str(h), cell_h_style) for h in _hdr]]
+                for _t in _years:
+                    _row_vals = [
+                        cone_capitale * _math.exp((_mu_log - 2 * _sig) * _t),
+                        cone_capitale * _math.exp((_mu_log - _sig) * _t),
+                        cone_capitale * _math.exp(_mu_log * _t),
+                        cone_capitale * _math.exp((_mu_log + _sig) * _t),
+                        cone_capitale * _math.exp((_mu_log + 2 * _sig) * _t),
+                    ]
+                    _tbl_data.append(
+                        [Paragraph(_safe_str(str(_t)), cell_style)]
+                        + [Paragraph(_safe_str(f"€{v:,.0f}"), cell_style)
+                           for v in _row_vals]
+                    )
+
+                _col_w = [1.5 * cm] + [(_PAGE_W - 1.5 * cm) / 5] * 5
+                _tbl = Table(_tbl_data, colWidths=_col_w, repeatRows=1)
+                _tbl.setStyle(TableStyle([
+                    ("BACKGROUND",  (0, 0), (-1, 0), NAVY_RL),
+                    ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                     [colors.white, colors.HexColor("#F0F4FF")]),
+                    ("GRID",        (0, 0), (-1, -1), 0.4, GRAY_MID),
+                    ("VALIGN",      (0, 0), (-1, -1), "MIDDLE"),
+                    ("ALIGN",       (1, 0), (-1, -1), "RIGHT"),
+                    ("ALIGN",       (0, 0), (0, -1),  "CENTER"),
+                    ("FONTSIZE",    (0, 0), (-1, -1),  8),
+                    # Colonna mediana in grassetto
+                    ("FONTNAME",    (3, 1), (3, -1), _FONT_BOLD),
+                ]))
+                story.append(_tbl)
+                story.append(Spacer(1, 0.25 * cm))
 
     # ── Footer ────────────────────────────────────────────────────────────
     story.append(HRFlowable(width="100%", thickness=0.5, color=GRAY_MID))

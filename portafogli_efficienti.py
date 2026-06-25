@@ -3433,6 +3433,11 @@ elif nav == "⭐ Portafoglio Qualità":
                 "perf_3y": r.get("Perf 3Y %"), "rating_fida": r.get("★ FIDA"),
             } for _, r in df_porto.iterrows()},
             cone_bytes=_ib_cone_bytes_q,
+            cone_portfolios=[{"label": f"Qualità {profilo}",
+                               "mu": _ib_mu_port_q, "sigma": _ib_sigma_port_q}]
+                             if _ib_mu_port_q is not None else None,
+            cone_capitale=float(st.session_state.get("ib_capitale_q", 100_000)),
+            cone_orizzonte=int(st.session_state.get("ib_orizzonte_q", 10)),
         )
         if pdf_q:
             exp_c2.download_button("📄 Esporta PDF", data=pdf_q,
@@ -3748,6 +3753,11 @@ elif nav == "🪙 Portafoglio ETF":
             } for _, r in df_porto_etf.iterrows()},
             include_stars=False,
             cone_bytes=_ibe_cone_bytes,
+            cone_portfolios=[{"label": f"ETF {profilo_etf}",
+                               "mu": _ibe_mu_p, "sigma": _ibe_sig_p}]
+                             if _ibe_mu_p is not None else None,
+            cone_capitale=float(st.session_state.get("ib_capitale_etf", 100_000)),
+            cone_orizzonte=int(st.session_state.get("ib_orizzonte_etf", 10)),
         )
         if pdf_etf:
             exp_e2.download_button("📄 Esporta PDF", data=pdf_etf,
