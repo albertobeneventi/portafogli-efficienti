@@ -348,6 +348,53 @@ def _ibbotson_cone_fig(
     return fig
 
 
+def _ibbotson_table(
+    portfolios: list[dict],
+    capitale: float,
+    years: tuple = (1, 3, 5, 10),
+) -> pd.DataFrame:
+    """Tabella scenari per il cono di Ibbotson.
+
+    Colonne: Anni | −2σ 2.5% | −1σ 16% | Mediana 50% | +1σ 84% | +2σ 97.5%
+    Una riga per ogni combinazione (portafoglio × anno).
+    """
+    rows = []
+    for p in portfolios:
+        mu, sigma, label = p["mu"], p["sigma"], p["label"]
+        mu_log = mu - 0.5 * sigma ** 2
+        for t in years:
+            rows.append({
+                "Portafoglio": label,
+                "Anni": t,
+                "−2σ  (2.5%)": capitale * np.exp((mu_log - 2 * sigma) * t),
+                "−1σ  (16%)":  capitale * np.exp((mu_log - sigma) * t),
+                "Mediana (50%)": capitale * np.exp(mu_log * t),
+                "+1σ  (84%)":  capitale * np.exp((mu_log + sigma) * t),
+                "+2σ  (97.5%)": capitale * np.exp((mu_log + 2 * sigma) * t),
+            })
+    return pd.DataFrame(rows)
+
+
+def _ibbotson_reliability(n_with_data: int, n_total: int) -> tuple[str, str]:
+    """Restituisce (emoji+label, spiegazione) sull'affidabilità della stima."""
+    pct = n_with_data / max(n_total, 1)
+    if pct >= 0.75:
+        return "🟢 Alta", (
+            f"{n_with_data}/{n_total} fondi con dati storici reali. "
+            "σ calcolata su NAV effettivi; μ da prior di categoria forward-looking."
+        )
+    elif pct >= 0.40:
+        return "🟡 Moderata", (
+            f"{n_with_data}/{n_total} fondi con dati storici. "
+            "Parte di σ stimata da prior di categoria; μ sempre forward-looking."
+        )
+    else:
+        return "🟠 Indicativa", (
+            f"Solo {n_with_data}/{n_total} fondi con dati storici. "
+            "σ prevalentemente da prior di categoria — usare come ordine di grandezza."
+        )
+
+
 # ---------------------------------------------------------------------------
 # INIT SESSIONE
 # ---------------------------------------------------------------------------
@@ -3270,10 +3317,11 @@ elif nav == "⭐ Portafoglio Qualità":
                 "Orizzonte (anni)", 1, 30, 10, key="ib_orizzonte_q",
             )
             if _ib_mu_port_q is not None:
+                _ib_pq_series = [{"label": f"Qualità {profilo}",
+                                   "mu": _ib_mu_port_q, "sigma": _ib_sigma_port_q,
+                                   "color": "#1A73E8"}]
                 _ib_fig_q = _ibbotson_cone_fig(
-                    [{"label": f"Qualità {profilo}", "mu": _ib_mu_port_q,
-                      "sigma": _ib_sigma_port_q, "color": "#1A73E8"}],
-                    orizzonte=_ib_orizzonte_q,
+                    _ib_pq_series, orizzonte=_ib_orizzonte_q,
                     capitale=float(_ib_capitale_q),
                 )
                 _ib_c2.plotly_chart(_ib_fig_q, use_container_width=True,
@@ -3282,6 +3330,27 @@ elif nav == "⭐ Portafoglio Qualità":
                 _ib_c1.metric("Volatilità (σ)", f"{_ib_sigma_port_q*100:.2f}%")
                 _ib_c1.metric("Sharpe stimato",
                               f"{(_ib_mu_port_q - 0.03) / _ib_sigma_port_q:.2f}")
+                # Affidabilità
+                _ib_n_data_q = int(df_porto["Perf 3Y %"].notna().sum()) if "Perf 3Y %" in df_porto.columns else 0
+                _ib_rel_label, _ib_rel_note = _ibbotson_reliability(_ib_n_data_q, len(df_porto))
+                _ib_c1.markdown(f"**Affidabilità stima:** {_ib_rel_label}")
+                st.caption(f"ℹ️ {_ib_rel_note}")
+                # Tabella scenari
+                st.markdown("**📊 Scenari per orizzonte temporale**")
+                _ib_yrs_q = [y for y in (1, 3, 5, 10) if y <= _ib_orizzonte_q]
+                if _ib_yrs_q:
+                    _ib_tbl_q = _ibbotson_table(_ib_pq_series, float(_ib_capitale_q),
+                                                 years=tuple(_ib_yrs_q))
+                    _ib_tbl_q = _ib_tbl_q.drop(columns=["Portafoglio"])
+                    _fmt_q = {c: st.column_config.NumberColumn(format="€ %,.0f")
+                               for c in _ib_tbl_q.columns if c != "Anni"}
+                    st.dataframe(_ib_tbl_q, hide_index=True, use_container_width=True,
+                                 column_config=_fmt_q)
+                    st.caption(
+                        "Ogni colonna è un percentile della distribuzione log-normale: "
+                        "il 2.5% dei percorsi storicamente scende sotto −2σ, "
+                        "il 16% scende sotto −1σ. La mediana è il valore 'tipico' (caso centrale)."
+                    )
             else:
                 st.info("Dati insufficienti per la proiezione.")
 
@@ -3567,10 +3636,11 @@ elif nav == "🪙 Portafoglio ETF":
                 "Orizzonte (anni)", 1, 30, 10, key="ib_orizzonte_etf",
             )
             if _ibe_mu_p is not None:
+                _ibe_series = [{"label": f"ETF {profilo_etf}",
+                                "mu": _ibe_mu_p, "sigma": _ibe_sig_p,
+                                "color": "#F4A300"}]
                 _ibe_fig = _ibbotson_cone_fig(
-                    [{"label": f"ETF {profilo_etf}", "mu": _ibe_mu_p,
-                      "sigma": _ibe_sig_p, "color": "#F4A300"}],
-                    orizzonte=_ibe_orizzonte,
+                    _ibe_series, orizzonte=_ibe_orizzonte,
                     capitale=float(_ibe_capitale),
                 )
                 _ibe_c2.plotly_chart(_ibe_fig, use_container_width=True,
@@ -3579,6 +3649,26 @@ elif nav == "🪙 Portafoglio ETF":
                 _ibe_c1.metric("Volatilità (σ)", f"{_ibe_sig_p*100:.2f}%")
                 _ibe_c1.metric("Sharpe stimato",
                                f"{(_ibe_mu_p - 0.03) / _ibe_sig_p:.2f}")
+                _ibe_n_data = int(df_porto_etf["Perf 3Y %"].notna().sum()) \
+                    if "Perf 3Y %" in df_porto_etf.columns else 0
+                _ibe_rel_label, _ibe_rel_note = _ibbotson_reliability(
+                    _ibe_n_data, len(df_porto_etf))
+                _ibe_c1.markdown(f"**Affidabilità stima:** {_ibe_rel_label}")
+                st.caption(f"ℹ️ {_ibe_rel_note}")
+                _ibe_yrs = [y for y in (1, 3, 5, 10) if y <= _ibe_orizzonte]
+                if _ibe_yrs:
+                    st.markdown("**📊 Scenari per orizzonte temporale**")
+                    _ibe_tbl = _ibbotson_table(_ibe_series, float(_ibe_capitale),
+                                               years=tuple(_ibe_yrs))
+                    _ibe_tbl = _ibe_tbl.drop(columns=["Portafoglio"])
+                    _fmt_e = {c: st.column_config.NumberColumn(format="€ %,.0f")
+                               for c in _ibe_tbl.columns if c != "Anni"}
+                    st.dataframe(_ibe_tbl, hide_index=True, use_container_width=True,
+                                 column_config=_fmt_e)
+                    st.caption(
+                        "Ogni colonna è un percentile: il 2.5% dei percorsi scende sotto −2σ, "
+                        "il 16% sotto −1σ. La mediana rappresenta il caso centrale."
+                    )
             else:
                 st.info("Dati insufficienti per la proiezione.")
 
@@ -3829,6 +3919,31 @@ elif nav == "🔀 Comparatore":
             )
             _ibc_c2.plotly_chart(_ibc_fig, use_container_width=True,
                                   config={"displayModeBar": False})
+            _ibc_c1.caption(
+                "Le bande si sovrappongono nel grafico; la tabella sotto mostra "
+                "i valori numerici per confronto diretto."
+            )
+
+            # Tabella scenari — una riga per portafoglio × anno, poi pivot per leggibilità
+            _ibc_yrs = [y for y in (1, 3, 5, 10) if y <= _ibc_orizzonte]
+            if _ibc_yrs:
+                st.markdown("**📊 Scenari per orizzonte temporale**")
+                _ibc_tbl_raw = _ibbotson_table(_ibc_series, float(_ibc_capitale),
+                                               years=tuple(_ibc_yrs))
+                # Se portafoglio singolo: mostra senza colonna Portafoglio
+                if len(_ibc_series) == 1:
+                    _ibc_tbl_raw = _ibc_tbl_raw.drop(columns=["Portafoglio"])
+                _fmt_c = {c: st.column_config.NumberColumn(format="€ %,.0f")
+                           for c in _ibc_tbl_raw.columns if c not in ("Anni", "Portafoglio")}
+                st.dataframe(_ibc_tbl_raw, hide_index=True, use_container_width=True,
+                             column_config=_fmt_c)
+                st.caption(
+                    "Colonne: percentili della distribuzione log-normale. "
+                    "−2σ (2.5%): solo il 2.5% dei percorsi finisce più in basso. "
+                    "Mediana (50%): valore più probabile. "
+                    "+2σ (97.5%): solo il 2.5% dei percorsi finisce più in alto. "
+                    "Non è un backtest né una garanzia di rendimento."
+                )
 
         # ── EXPORT COMPARATORE ────────────────────────────────────────────
         st.markdown("---")
